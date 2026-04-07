@@ -6,24 +6,62 @@ Avvio dell'interfaccia grafica o esecuzione in modalità CLI.
 
 import sys
 import os
+import types
+import importlib
 from pathlib import Path
 
-# Aggiunge la directory parent al path Python
-sys.path.insert(0, str(Path(__file__).parent.parent))
+_PKG_DIR  = Path(__file__).parent          # btk-speaker-designer/
+_ROOT_DIR = _PKG_DIR.parent               # SubSim/
+_PKG_NAME = "btk_speaker_designer"
+
+# SubSim/ nel path per il modulo 'shared'
+sys.path.insert(0, str(_ROOT_DIR))
+
+
+def _bootstrap_package():
+    """
+    Registra 'btk-speaker-designer/' come pacchetto Python 'btk_speaker_designer'
+    in sys.modules. Questo è necessario perché il nome della directory contiene
+    un trattino, che non è un identificatore Python valido, ma i file al suo
+    interno usano import relativi (from ..core.X) che richiedono un pacchetto padre.
+    """
+    if _PKG_NAME in sys.modules:
+        return
+
+    def _reg(name: str, path: Path):
+        if name not in sys.modules:
+            m = types.ModuleType(name)
+            m.__path__ = [str(path)]
+            m.__package__ = name
+            m.__name__ = name
+            sys.modules[name] = m
+
+    _reg(_PKG_NAME,                    _PKG_DIR)
+    _reg(f"{_PKG_NAME}.core",          _PKG_DIR / "core")
+    _reg(f"{_PKG_NAME}.gui",           _PKG_DIR / "gui")
+    _reg(f"{_PKG_NAME}.database",      _PKG_DIR / "database")
+    _reg(f"{_PKG_NAME}.exporters",     _PKG_DIR / "exporters")
+
+
+_bootstrap_package()
 
 
 def run_gui():
     """Avvia l'interfaccia grafica dell'applicazione."""
     try:
-        from gui.main_window import create_app
+        from btk_speaker_designer.gui.main_window import create_app
         app, window = create_app()
         window.show()
-        return app.exec_()
-    except ImportError as e:
+        # PySide6 usa exec(), PyQt5 usa exec_() — entrambi funzionano
+        return app.exec() if hasattr(app, "exec") and not hasattr(app, "exec_") \
+               else app.exec_()
+    except Exception as e:
         print(f"Impossibile avviare la GUI: {e}")
         print("Assicurati di avere PyQt5 o PySide6 installato:")
         print("  pip install PyQt5")
         print("  oppure: pip install PySide6")
+        import traceback
+        traceback.print_exc()
         return 1
 
 
