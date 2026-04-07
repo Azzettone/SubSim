@@ -1,305 +1,476 @@
 """
 Finestra principale di BTK Speaker Designer.
-Entry point dell'interfaccia grafica PyQt5/PySide6.
+
+Layout (corrisponde al mockup concordato):
+
+  ┌───────────────────────────────────────────────────────┐
+  │  TOOLBAR: Nuovo | Apri | Salva | ── | DXF | PDF       │
+  ├──────────────────┬────────────────────────────────────┤
+  │  INPUT UTENTE    │                                    │
+  │  (tipo, driver,  │       GRAFICA 2D                   │
+  │   Fc, espans.,   │       Profilo tromba               │
+  │   ratio, vinc.)  │                                    │
+  ├──────────────────┤                                    │
+  │  MODIFICA DESIGN │                                    │
+  │  (geom, temp,    │                                    │
+  │   prezzo legno)  │                                    │
+  ├──────────────────┴────────────────────────────────────┤
+  │  TAB: Phase/Magnitude | Impedance | Panel List        │
+  ├───────────────────────────────────────────────────────┤
+  │  Status bar                                           │
+  └───────────────────────────────────────────────────────┘
 """
+
+import sys
+import json
+from pathlib import Path
+
+# Assicura che il root del repo sia nel path per import di 'shared'
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 try:
     from PyQt5.QtWidgets import (
         QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-        QTabWidget, QStatusBar, QMenuBar, QMenu, QAction,
-        QFileDialog, QMessageBox, QSplitter, QLabel
+        QSplitter, QStatusBar, QToolBar, QAction, QFileDialog,
+        QMessageBox, QSizePolicy, QApplication
     )
-    from PyQt5.QtCore import Qt, QTimer
+    from PyQt5.QtCore import Qt, QSize
     from PyQt5.QtGui import QFont, QIcon
     PYQT_AVAILABLE = True
 except ImportError:
     try:
         from PySide6.QtWidgets import (
             QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-            QTabWidget, QStatusBar, QMenuBar, QMenu, QAction,
-            QFileDialog, QMessageBox, QSplitter, QLabel
+            QSplitter, QStatusBar, QToolBar, QAction, QFileDialog,
+            QMessageBox, QSizePolicy, QApplication
         )
-        from PySide6.QtCore import Qt, QTimer
+        from PySide6.QtCore import Qt, QSize
         from PySide6.QtGui import QFont, QIcon
         PYQT_AVAILABLE = True
     except ImportError:
         PYQT_AVAILABLE = False
 
-import json
-import sys
-from pathlib import Path
-
-# Aggiunge il parent al path per i moduli condivisi
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
-from ..core.constants import SPEAKER_TYPES, GEOMETRY_TYPES
-from ..database.db_manager import initialize_database
-
 
 if PYQT_AVAILABLE:
+
     class MainWindow(QMainWindow):
         """
         Finestra principale di BTK Speaker Designer.
-        Coordina tutti i pannelli e gestisce il flusso dell'applicazione.
+        Implementa il layout a pannelli fissi concordato nel mockup.
         """
 
         def __init__(self):
             super().__init__()
-            # Inizializza database
+
+            from ..database.db_manager import initialize_database
             initialize_database()
 
-            self.setWindowTitle("BTK Speaker Designer v1.0")
-            self.setMinimumSize(1200, 800)
-            self.resize(1400, 900)
+            self.setWindowTitle("BTK Speaker Designer  v1.0")
+            self.setMinimumSize(1280, 820)
+            self.resize(1500, 950)
 
-            # Applica stile
+            self._horn_geometry = None
+            self._cabinet_geometry = None
+            self._driver = None
+
             self._apply_style()
-
-            # Costruisce UI
-            self._build_menu()
+            self._build_toolbar()
             self._build_central_widget()
             self._build_status_bar()
 
-            # Dati correnti del progetto
-            self.current_project = {
-                "name": "Nuovo Progetto",
-                "speaker_type": None,
-                "geometry_type": None,
-                "driver": None,
-                "horn": None,
-                "parameters": {},
-            }
+        # ── Stile ──────────────────────────────────────────────────────────
 
         def _apply_style(self):
-            """Applica il tema scuro all'applicazione."""
             try:
-                import sys
-                sys.path.insert(0, str(Path(__file__).parent.parent.parent))
                 from shared.ui_components import QSS_MAIN
                 self.setStyleSheet(QSS_MAIN)
             except ImportError:
-                pass
+                self.setStyleSheet("""
+                    QMainWindow, QWidget {
+                        background-color: #12121E; color: #C0C0E0;
+                    }
+                    QGroupBox {
+                        border: 1px solid #2A2A44; border-radius: 4px;
+                        margin-top: 8px; padding-top: 6px;
+                        font-weight: bold; color: #A0A0C0;
+                    }
+                    QGroupBox::title { subcontrol-origin: margin; left: 8px; }
+                    QComboBox, QDoubleSpinBox, QSpinBox, QLineEdit {
+                        background-color: #1E1E32; border: 1px solid #2A2A44;
+                        border-radius: 3px; padding: 3px 6px;
+                        color: #C0C0E0; min-height: 22px;
+                    }
+                    QPushButton {
+                        background-color: #2A2A44; border: 1px solid #4A4A6A;
+                        border-radius: 4px; padding: 5px 12px; color: #C0C0E0;
+                    }
+                    QPushButton:hover  { background-color: #3A3A5A; }
+                    QPushButton:pressed { background-color: #1A1A2E; }
+                    QTabWidget::pane  { border: 1px solid #2A2A44; }
+                    QTabBar::tab {
+                        background: #1A1A2E; color: #808090;
+                        padding: 6px 16px; border: 1px solid #2A2A44;
+                        border-bottom: none;
+                    }
+                    QTabBar::tab:selected { background: #2A2A44; color: #C0C0E0; }
+                    QTableWidget {
+                        background-color: #1A1A2E;
+                        alternate-background-color: #1E1E32;
+                        gridline-color: #2A2A44; color: #C0C0E0;
+                    }
+                    QHeaderView::section {
+                        background-color: #2A2A44; color: #A0A0C0;
+                        padding: 4px; border: 1px solid #1A1A2E;
+                    }
+                    QStatusBar { background-color: #0E0E1A; color: #808090; }
+                    QToolBar   { background-color: #16162A; border-bottom: 1px solid #2A2A44; }
+                    QSplitter::handle { background-color: #2A2A44; width: 4px; height: 4px; }
+                    QCheckBox { color: #C0C0E0; }
+                    QTextBrowser { background-color: #1A1A2E; color: #C0C0E0;
+                                   border: 1px solid #2A2A44; }
+                """)
 
-        def _build_menu(self):
-            """Costruisce la barra dei menu."""
-            menubar = self.menuBar()
+        # ── Toolbar ───────────────────────────────────────────────────────
 
-            # Menu File
-            file_menu = menubar.addMenu("&File")
+        def _build_toolbar(self):
+            toolbar = QToolBar("Principale")
+            toolbar.setMovable(False)
+            toolbar.setIconSize(QSize(18, 18))
+            self.addToolBar(toolbar)
 
-            new_action = QAction("&Nuovo Progetto", self)
-            new_action.setShortcut("Ctrl+N")
-            new_action.triggered.connect(self._new_project)
-            file_menu.addAction(new_action)
+            for label, shortcut, slot, tip in [
+                ("🗋  Nuovo",       "Ctrl+N", self._action_new,  "Nuovo progetto"),
+                ("📂  Apri",        "Ctrl+O", self._action_open, "Apri progetto"),
+                ("💾  Salva",       "Ctrl+S", self._action_save, "Salva progetto"),
+            ]:
+                act = QAction(label, self)
+                act.setShortcut(shortcut)
+                act.setToolTip(f"{tip} ({shortcut})")
+                act.triggered.connect(slot)
+                toolbar.addAction(act)
 
-            open_action = QAction("&Apri Progetto...", self)
-            open_action.setShortcut("Ctrl+O")
-            open_action.triggered.connect(self._open_project)
-            file_menu.addAction(open_action)
+            toolbar.addSeparator()
 
-            save_action = QAction("&Salva Progetto", self)
-            save_action.setShortcut("Ctrl+S")
-            save_action.triggered.connect(self._save_project)
-            file_menu.addAction(save_action)
+            for label, slot, tip in [
+                ("📐  Esporta DXF", self._action_export_dxf, "Esporta DXF per CNC"),
+                ("📄  Esporta PDF", self._action_export_pdf, "Esporta report PDF"),
+            ]:
+                act = QAction(label, self)
+                act.setToolTip(tip)
+                act.triggered.connect(slot)
+                toolbar.addAction(act)
 
-            file_menu.addSeparator()
+            toolbar.addSeparator()
+            act_about = QAction("ℹ  Info", self)
+            act_about.triggered.connect(self._action_about)
+            toolbar.addAction(act_about)
 
-            exit_action = QAction("E&sci", self)
-            exit_action.setShortcut("Ctrl+Q")
-            exit_action.triggered.connect(self.close)
-            file_menu.addAction(exit_action)
-
-            # Menu Esporta
-            export_menu = menubar.addMenu("&Esporta")
-
-            dxf_action = QAction("Esporta &DXF (CNC)...", self)
-            dxf_action.triggered.connect(self._export_dxf)
-            export_menu.addAction(dxf_action)
-
-            pdf_action = QAction("Esporta &Report PDF...", self)
-            pdf_action.triggered.connect(self._export_pdf)
-            export_menu.addAction(pdf_action)
-
-            cutlist_action = QAction("Lista &Taglio Pannelli...", self)
-            cutlist_action.triggered.connect(self._export_cutlist)
-            export_menu.addAction(cutlist_action)
-
-            # Menu Aiuto
-            help_menu = menubar.addMenu("&Aiuto")
-            about_action = QAction("&Informazioni...", self)
-            about_action.triggered.connect(self._show_about)
-            help_menu.addAction(about_action)
+        # ── Layout centrale ───────────────────────────────────────────────
 
         def _build_central_widget(self):
-            """Costruisce il widget centrale con tab."""
             central = QWidget()
             self.setCentralWidget(central)
-            layout = QVBoxLayout(central)
-            layout.setContentsMargins(8, 8, 8, 8)
+            root_layout = QVBoxLayout(central)
+            root_layout.setContentsMargins(6, 6, 6, 4)
+            root_layout.setSpacing(4)
 
-            # Tab principale
-            self.tab_widget = QTabWidget()
-            layout.addWidget(self.tab_widget)
+            # Splitter verticale: [top] / [analysis_tabs]
+            self.vsplit = QSplitter(Qt.Vertical)
+            root_layout.addWidget(self.vsplit)
 
-            # Importa e crea le tab
-            self._create_tabs()
+            # ── Top widget ─────────────────────────────────────────────────
+            top_widget = QWidget()
+            top_layout = QHBoxLayout(top_widget)
+            top_layout.setContentsMargins(0, 0, 0, 0)
+            top_layout.setSpacing(0)
 
-        def _create_tabs(self):
-            """Crea le tab dell'applicazione."""
-            try:
-                from .speaker_type_selector import SpeakerTypeSelectorWidget
-                self.type_selector = SpeakerTypeSelectorWidget(self)
-                self.tab_widget.addTab(self.type_selector, "1. Tipo Speaker")
-            except Exception as e:
-                placeholder = QLabel(f"Tipo Speaker\n\nErrore: {e}")
-                placeholder.setAlignment(Qt.AlignCenter)
-                self.tab_widget.addTab(placeholder, "1. Tipo Speaker")
+            # Splitter orizzontale: [left_col] / [horn_view]
+            self.hsplit = QSplitter(Qt.Horizontal)
+            top_layout.addWidget(self.hsplit)
 
-            try:
-                from .driver_selector import DriverSelectorWidget
-                self.driver_selector = DriverSelectorWidget(self)
-                self.tab_widget.addTab(self.driver_selector, "2. Seleziona Driver")
-            except Exception as e:
-                placeholder = QLabel(f"Driver\n\nErrore: {e}")
-                placeholder.setAlignment(Qt.AlignCenter)
-                self.tab_widget.addTab(placeholder, "2. Driver")
+            # Colonna sinistra: [input_panel] / [design_panel]
+            self.left_vsplit = QSplitter(Qt.Vertical)
 
-            try:
-                from .horn_designer import HornDesignerWidget
-                self.horn_designer = HornDesignerWidget(self)
-                self.tab_widget.addTab(self.horn_designer, "3. Progetta Tromba")
-            except Exception as e:
-                placeholder = QLabel(f"Tromba\n\nErrore: {e}")
-                placeholder.setAlignment(Qt.AlignCenter)
-                self.tab_widget.addTab(placeholder, "3. Tromba")
+            from .input_panel import InputPanel
+            from .design_panel import DesignPanel
 
-            try:
-                from .visualization import VisualizationWidget
-                self.visualization = VisualizationWidget(self)
-                self.tab_widget.addTab(self.visualization, "4. Visualizzazione")
-            except Exception as e:
-                placeholder = QLabel(f"Visualizzazione\n\nErrore: {e}")
-                placeholder.setAlignment(Qt.AlignCenter)
-                self.tab_widget.addTab(placeholder, "4. Visualizzazione")
+            self.input_panel = InputPanel(self)
+            self.design_panel = DesignPanel(self)
+            self.left_vsplit.addWidget(self.input_panel)
+            self.left_vsplit.addWidget(self.design_panel)
+            self.left_vsplit.setSizes([480, 280])
+
+            self.hsplit.addWidget(self.left_vsplit)
+
+            # Grafica 2D a destra
+            from .horn_view import HornView
+            self.horn_view = HornView(self)
+            self.hsplit.addWidget(self.horn_view)
+            self.hsplit.setSizes([320, 900])
+
+            self.vsplit.addWidget(top_widget)
+
+            # ── Tab di analisi in basso ────────────────────────────────────
+            from .analysis_tabs import AnalysisTabs
+            self.analysis_tabs = AnalysisTabs(self)
+            self.vsplit.addWidget(self.analysis_tabs)
+            self.vsplit.setSizes([530, 280])
+
+            # ── Connessione segnali ────────────────────────────────────────
+            self.input_panel.calculate_requested.connect(self._on_calculate)
+            self.input_panel.driver_changed.connect(self._on_driver_changed)
+            self.design_panel.geometry_changed.connect(self._on_geometry_changed)
 
         def _build_status_bar(self):
-            """Costruisce la barra di stato."""
             self.status_bar = QStatusBar()
             self.setStatusBar(self.status_bar)
-            self.status_bar.showMessage("BTK Speaker Designer pronto.")
+            self.status_bar.showMessage(
+                "BTK Speaker Designer  —  Seleziona un driver e premi  ⚙ Calcola."
+            )
 
-        def update_status(self, message: str):
-            """Aggiorna il messaggio nella barra di stato."""
-            self.status_bar.showMessage(message)
+        # ── Calcolo principale ────────────────────────────────────────────
 
-        def set_speaker_type(self, speaker_type: str):
-            """Imposta il tipo di speaker corrente."""
-            self.current_project["speaker_type"] = speaker_type
-            self.update_status(f"Tipo selezionato: {speaker_type}")
+        def _on_calculate(self, params: dict):
+            if params.get("error") == "no_driver":
+                QMessageBox.warning(
+                    self, "Driver mancante",
+                    "Seleziona un driver dal menu a tendina o dal selettore (...)."
+                )
+                return
 
-        def set_driver(self, driver):
-            """Imposta il driver corrente."""
-            self.current_project["driver"] = driver
-            if driver:
-                self.update_status(f"Driver: {driver.manufacturer} {driver.model}")
+            driver = params["driver"]
+            self._driver = driver
 
-        def _new_project(self):
-            """Crea un nuovo progetto."""
-            self.current_project = {
-                "name": "Nuovo Progetto",
-                "speaker_type": None,
-                "geometry_type": None,
-                "driver": None,
-                "horn": None,
-                "parameters": {},
-            }
-            self.tab_widget.setCurrentIndex(0)
-            self.update_status("Nuovo progetto creato.")
+            # Velocità del suono in funzione della temperatura
+            temp_c = self.design_panel.get_params()["temperature_c"]
+            try:
+                from shared.acoustic_core import speed_of_sound
+                c = speed_of_sound(temp_c)
+            except ImportError:
+                c = 331.3 * (1 + temp_c / 273.15) ** 0.5
 
-        def _open_project(self):
-            """Apre un progetto da file JSON."""
+            # 1. Calcola geometria tromba
+            from ..core.horn_calculator import design_horn
+            try:
+                self._horn_geometry = design_horn(
+                    cutoff_freq_hz=params["fc_hz"],
+                    driver_sd_m2=driver.sd,
+                    smouth_sthroat_ratio=params["smouth_ratio"],
+                    throat_compression_ratio=params["compression_ratio"],
+                    expansion_type=params["expansion_type"],
+                    c=c,
+                )
+            except Exception as e:
+                QMessageBox.critical(self, "Errore calcolo tromba", str(e))
+                return
+
+            # 2. Geometria cabinet con eventuale fold / vincoli
+            design_params = self.design_panel.get_params()
+            geometry_type = design_params["geometry_type"]
+            wood_price    = design_params["wood_price"]
+
+            from ..core.constraint_solver import DimensionalConstraints, solve_with_constraints
+            from ..core.geometry import (
+                design_straight_horn, design_folded_horn, design_2folded_horn
+            )
+            from ..core.constants import GEOMETRY_FOLDED, GEOMETRY_2FOLDED
+
+            constraints = DimensionalConstraints(
+                max_width_mm=params.get("max_width_mm"),
+                max_height_mm=params.get("max_height_mm"),
+                max_depth_mm=params.get("max_depth_mm"),
+            )
+            try:
+                if constraints.has_constraints():
+                    result = solve_with_constraints(self._horn_geometry, constraints)
+                    self._cabinet_geometry = result.cabinet
+                elif geometry_type == GEOMETRY_FOLDED:
+                    self._cabinet_geometry = design_folded_horn(self._horn_geometry)
+                elif geometry_type == GEOMETRY_2FOLDED:
+                    self._cabinet_geometry = design_2folded_horn(self._horn_geometry)
+                else:
+                    self._cabinet_geometry = design_straight_horn(self._horn_geometry)
+            except Exception as e:
+                QMessageBox.critical(self, "Errore geometria cabinet", str(e))
+                return
+
+            # 3. Aggiorna tutti i widget
+            self.horn_view.update_horn(self._horn_geometry, self._cabinet_geometry)
+            self.analysis_tabs.update_all(
+                self._horn_geometry, self._cabinet_geometry, driver, wood_price
+            )
+            self.design_panel.update_cabinet_summary(self._cabinet_geometry)
+
+            g = self._horn_geometry
+            cab = self._cabinet_geometry
+            self.status_bar.showMessage(
+                f"Driver: {driver.manufacturer} {driver.model}  │  "
+                f"Fc = {g.cutoff_frequency_hz:.0f} Hz  │  "
+                f"L = {g.horn_length_m*100:.1f} cm  │  "
+                f"m = {g.flare_rate_m:.4f} m⁻¹  │  "
+                f"Cabinet: {cab.total_width_mm:.0f}×{cab.total_height_mm:.0f}×"
+                f"{cab.total_depth_mm:.0f} mm"
+            )
+
+        def _on_driver_changed(self, driver):
+            """Aggiorna la curva impedenza appena cambia il driver."""
+            self._driver = driver
+            self.analysis_tabs.impedance_tab.update(driver)
+
+        def _on_geometry_changed(self, geometry_type: str):
+            """Ricalcola il cabinet se c'è già una geometria tromba."""
+            if self._horn_geometry is None:
+                return
+            from ..core.geometry import (
+                design_straight_horn, design_folded_horn, design_2folded_horn
+            )
+            from ..core.constants import GEOMETRY_FOLDED, GEOMETRY_2FOLDED
+            try:
+                if geometry_type == GEOMETRY_FOLDED:
+                    self._cabinet_geometry = design_folded_horn(self._horn_geometry)
+                elif geometry_type == GEOMETRY_2FOLDED:
+                    self._cabinet_geometry = design_2folded_horn(self._horn_geometry)
+                else:
+                    self._cabinet_geometry = design_straight_horn(self._horn_geometry)
+
+                self.horn_view.update_horn(self._horn_geometry, self._cabinet_geometry)
+                self.design_panel.update_cabinet_summary(self._cabinet_geometry)
+                wood_price = self.design_panel.get_params()["wood_price"]
+                self.analysis_tabs.panel_list_tab.update(self._cabinet_geometry, wood_price)
+            except Exception as e:
+                self.status_bar.showMessage(f"Errore cambio geometria: {e}")
+
+        # ── Azioni toolbar ────────────────────────────────────────────────
+
+        def _action_new(self):
+            self._horn_geometry = None
+            self._cabinet_geometry = None
+            self._driver = None
+            if MATPLOTLIB_AVAILABLE_GUARD():
+                self.horn_view._draw_placeholder()
+            self.design_panel.summary_label.setText("—\n—\n—")
+            self.status_bar.showMessage(
+                "Nuovo progetto  —  Seleziona un driver e premi  ⚙ Calcola."
+            )
+
+        def _action_open(self):
             path, _ = QFileDialog.getOpenFileName(
-                self, "Apri Progetto", "", "Progetti BTK (*.btk.json);;Tutti i file (*)"
+                self, "Apri Progetto", "",
+                "Progetti BTK (*.btk.json);;Tutti i file (*)"
             )
-            if path:
-                try:
-                    with open(path, "r", encoding="utf-8") as f:
-                        self.current_project = json.load(f)
-                    self.update_status(f"Progetto aperto: {path}")
-                except Exception as e:
-                    QMessageBox.critical(self, "Errore", f"Impossibile aprire il file:\n{e}")
+            if not path:
+                return
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                self.input_panel.set_params(data.get("input", {}))
+                self.design_panel.set_params(data.get("design", {}))
+                self.status_bar.showMessage(f"Progetto aperto: {path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Errore apertura", str(e))
 
-        def _save_project(self):
-            """Salva il progetto corrente su file JSON."""
+        def _action_save(self):
             path, _ = QFileDialog.getSaveFileName(
-                self, "Salva Progetto", "", "Progetti BTK (*.btk.json)"
+                self, "Salva Progetto", "",
+                "Progetti BTK (*.btk.json)"
             )
-            if path:
-                if not path.endswith(".btk.json"):
-                    path += ".btk.json"
-                try:
-                    # Serializza solo dati serializzabili
-                    save_data = {
-                        k: v for k, v in self.current_project.items()
-                        if isinstance(v, (str, int, float, bool, list, dict, type(None)))
-                    }
-                    with open(path, "w", encoding="utf-8") as f:
-                        json.dump(save_data, f, indent=2, ensure_ascii=False)
-                    self.update_status(f"Progetto salvato: {path}")
-                except Exception as e:
-                    QMessageBox.critical(self, "Errore", f"Impossibile salvare:\n{e}")
+            if not path:
+                return
+            if not path.endswith(".btk.json"):
+                path += ".btk.json"
+            try:
+                input_params = self.input_panel.get_params()
+                design_params = self.design_panel.get_params()
+                driver = input_params.pop("driver", None)
+                if driver and hasattr(driver, "to_dict"):
+                    input_params["driver_model"] = driver.model
+                    input_params["driver_dict"] = driver.to_dict()
+                data = {
+                    "version": "1.0",
+                    "input": input_params,
+                    "design": design_params,
+                }
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
+                self.status_bar.showMessage(f"Progetto salvato: {path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Errore salvataggio", str(e))
 
-        def _export_dxf(self):
-            """Esporta il progetto in formato DXF."""
-            QMessageBox.information(
-                self, "Export DXF",
-                "Funzione export DXF disponibile dopo aver calcolato una geometria completa."
+        def _action_export_dxf(self):
+            if self._cabinet_geometry is None:
+                QMessageBox.information(self, "Export DXF",
+                                        "Calcola prima una geometria completa.")
+                return
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Esporta DXF", "", "File DXF (*.dxf)"
             )
+            if not path:
+                return
+            try:
+                from ..exporters.dxf_export import export_cabinet_dxf
+                export_cabinet_dxf(self._cabinet_geometry, path)
+                self.status_bar.showMessage(f"DXF esportato: {path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Errore export DXF", str(e))
 
-        def _export_pdf(self):
-            """Esporta report PDF."""
-            QMessageBox.information(
-                self, "Export PDF",
-                "Funzione export PDF disponibile dopo aver calcolato una geometria completa."
+        def _action_export_pdf(self):
+            if self._horn_geometry is None:
+                QMessageBox.information(self, "Export PDF",
+                                        "Calcola prima una geometria completa.")
+                return
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Esporta Report PDF", "", "File PDF (*.pdf)"
             )
+            if not path:
+                return
+            try:
+                from ..exporters.pdf_report import generate_report
+                generate_report(
+                    horn_geometry=self._horn_geometry,
+                    cabinet_geometry=self._cabinet_geometry,
+                    driver=self._driver,
+                    output_path=path,
+                )
+                self.status_bar.showMessage(f"Report PDF esportato: {path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Errore export PDF", str(e))
 
-        def _export_cutlist(self):
-            """Esporta lista di taglio pannelli."""
-            QMessageBox.information(
-                self, "Lista Taglio",
-                "Lista taglio disponibile dopo aver calcolato una geometria completa."
-            )
-
-        def _show_about(self):
-            """Mostra la finestra Informazioni."""
+        def _action_about(self):
             QMessageBox.about(
-                self,
-                "BTK Speaker Designer",
-                """<h2>BTK Speaker Designer v1.0</h2>
-                <p>Software per il design di altoparlanti professionali.</p>
-                <p>Caratteristiche:</p>
+                self, "BTK Speaker Designer",
+                """<h2>BTK Speaker Designer  v1.0</h2>
+                <p>Software professionale per il design di altoparlanti e trombe acustiche.</p>
+                <hr>
+                <p><b>Caratteristiche:</b></p>
                 <ul>
-                <li>Design trombe acustiche (SUB, CD, FULLRANGE)</li>
-                <li>Database driver: RCF, Beyma, B&C, LaVoce</li>
-                <li>Database trombe commerciali</li>
-                <li>Calcolo somma in fase fronte/retro</li>
-                <li>Geometrie Straight/Folded/2-Folded</li>
-                <li>Vincoli dimensionali</li>
-                <li>Export DXF/STL/PDF</li>
+                <li>Trombe: esponenziale, conica, tractrix, hypex</li>
+                <li>Geometrie cabinet: Straight / Folded / 2-Folded</li>
+                <li>Database driver: RCF, Beyma, B&amp;C, LaVoce</li>
+                <li>Curva impedenza Z(f) con modello T&amp;S</li>
+                <li>Phase/Magnitude e somma fronte/retro</li>
+                <li>Vincoli dimensionali con risoluzione automatica</li>
+                <li>Export DXF (CNC) e Report PDF</li>
                 </ul>
-                <p>Basato sul foglio di calcolo Horn Calculator originale.</p>"""
+                <p>Basato sul foglio Horn Calculator originale.</p>"""
             )
+
+
+def MATPLOTLIB_AVAILABLE_GUARD() -> bool:
+    """Guard per chiamate a metodi matplotlib opzionali."""
+    try:
+        import matplotlib
+        return True
+    except ImportError:
+        return False
 
 
 def create_app():
-    """Crea e restituisce l'applicazione Qt e la finestra principale."""
+    """Crea e restituisce (QApplication, MainWindow)."""
     if not PYQT_AVAILABLE:
         raise ImportError(
-            "PyQt5 o PySide6 non trovato. "
-            "Installa con: pip install PyQt5\n"
-            "oppure: pip install PySide6"
+            "PyQt5 o PySide6 non trovato.\n"
+            "Installa con:  pip install PyQt5"
         )
-
     try:
         from PyQt5.QtWidgets import QApplication
     except ImportError:

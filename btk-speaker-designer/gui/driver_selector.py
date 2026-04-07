@@ -223,13 +223,27 @@ class DriverSelectorWidget(QWidget):
     def _confirm_driver(self):
         """Conferma la selezione del driver e passa alla tab successiva."""
         if self._selected_driver:
+            # Salva il DriverModel completo (non solo il dict) per permettere
+            # a HornDesignerWidget di usare direttamente tutti i parametri T&S
             if hasattr(self.parent(), 'set_driver'):
                 self.parent().set_driver(self._selected_driver)
-            if hasattr(self.parent(), 'current_project'):
-                self.parent().current_project["driver"] = {
-                    "manufacturer": self._selected_driver.manufacturer,
-                    "model": self._selected_driver.model,
-                }
             if hasattr(self.parent(), 'tab_widget'):
                 self.parent().tab_widget.setCurrentIndex(2)
             self.driver_selected.emit(self._selected_driver)
+
+    def set_filter_by_speaker_type(self, speaker_type: str):
+        """
+        Imposta il filtro tipo in base al tipo di speaker selezionato
+        nella tab precedente (es. SUB → subwoofer, CD → compression_driver).
+        """
+        type_map = {
+            "SUB": "subwoofer",
+            "CD": "compression_driver",
+            "FULLRANGE": None,  # mostra tutti
+        }
+        driver_type = type_map.get(speaker_type)
+        # Trova l'indice corretto nel combo
+        for i in range(self.type_combo.count()):
+            if self.type_combo.itemData(i) == driver_type:
+                self.type_combo.setCurrentIndex(i)
+                break

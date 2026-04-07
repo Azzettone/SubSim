@@ -22,13 +22,25 @@ import numpy as np
 
 try:
     import matplotlib
-    matplotlib.use("Agg")
+    # Backend Qt5Agg necessario per l'integrazione con PyQt5/PySide6
+    # Deve essere impostato prima di qualsiasi import di pyplot o backend
+    import os
+    os.environ.setdefault("MPLBACKEND", "Qt5Agg")
+    matplotlib.use("Qt5Agg")
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
     from matplotlib.figure import Figure
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
-    MATPLOTLIB_AVAILABLE = False
+    try:
+        import matplotlib
+        matplotlib.use("QtAgg")
+        import matplotlib.pyplot as plt
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+        from matplotlib.figure import Figure
+        MATPLOTLIB_AVAILABLE = True
+    except ImportError:
+        MATPLOTLIB_AVAILABLE = False
 
 
 class VisualizationWidget(QWidget):

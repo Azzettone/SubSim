@@ -22,9 +22,15 @@ except ImportError:
     from PySide6.QtCore import Qt, Signal
     from PySide6.QtGui import QFont
 
+import sys
 import numpy as np
+from pathlib import Path
+
+# Aggiunge il root del repo al path per permettere import di shared
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from ..core.horn_calculator import design_horn, HornGeometry
+from ..core.driver_model import DriverModel
 from ..core.geometry import (
     design_straight_horn, design_folded_horn, design_2folded_horn,
     auto_select_geometry, CabinetGeometry
@@ -190,15 +196,13 @@ class HornDesignerWidget(QWidget):
 
     def _calculate(self):
         """Esegue il calcolo della geometria della tromba."""
-        # Controlla se c'è un driver selezionato
+        # Recupera il DriverModel direttamente dal current_project
         driver = None
         if hasattr(self.parent(), 'current_project'):
-            driver_data = self.parent().current_project.get("driver")
-            if driver_data:
-                from ..database.db_manager import get_driver_by_model
-                driver = get_driver_by_model(driver_data.get("model", ""))
+            driver = self.parent().current_project.get("driver")
 
-        if driver is None:
+        # Accetta solo DriverModel (non dict)
+        if not isinstance(driver, DriverModel):
             self.result_browser.setHtml(
                 "<p><b>Attenzione:</b> Nessun driver selezionato. "
                 "Torna alla scheda 'Seleziona Driver' e scegli un driver.</p>"
@@ -206,14 +210,13 @@ class HornDesignerWidget(QWidget):
             return
 
         # Velocità del suono corretta per temperatura
-        from shared.acoustic_core import speed_of_sound
         try:
-            c = speed_of_sound(self.temperature_spin.value())
-        except ImportError:
-            import sys, os
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
             from shared.acoustic_core import speed_of_sound
             c = speed_of_sound(self.temperature_spin.value())
+        except ImportError:
+            # Fallback: formula diretta (Barometric, ISO 9613-1)
+            T = self.temperature_spin.value()
+            c = 331.3 * (1 + T / 273.15) ** 0.5
 
         # Calcola geometria tromba
         try:
