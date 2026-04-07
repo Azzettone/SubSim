@@ -34,3 +34,6 @@ Thumbs.db
 
 # SQLite databases (generated at runtime)
 *.db
+
+# Upload temporanei
+UPLOADS/
