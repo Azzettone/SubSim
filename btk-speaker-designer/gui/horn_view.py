@@ -152,6 +152,13 @@ class HornView(QWidget):
         ax.plot(x_full, r_full,  color=C_PROFILE, linewidth=2.0, label="Profilo tromba")
         ax.plot(x_full, -r_full, color=C_PROFILE, linewidth=2.0)
 
+        # Punti di suddivisione delle sezioni (visibili sulle due curve)
+        if len(x_vals) > 0:
+            ax.scatter(x_vals, r_vals,  color=C_PROFILE, s=28, zorder=5,
+                       edgecolors="#FFFFFF", linewidths=0.5, alpha=0.85)
+            ax.scatter(x_vals, -r_vals, color=C_PROFILE, s=28, zorder=5,
+                       edgecolors="#FFFFFF", linewidths=0.5, alpha=0.85)
+
         # Linea asse
         ax.axhline(y=0, color=C_AXIS, linewidth=0.8, linestyle="--", alpha=0.6)
 
@@ -189,11 +196,13 @@ class HornView(QWidget):
                 )
 
         # Riepilogo parametri in alto a sinistra
+        n_sec = len(g.sections)
         summary = (
             f"Fc = {g.cutoff_frequency_hz:.0f} Hz\n"
             f"L  = {g.horn_length_m*100:.1f} cm\n"
-            f"m  = {g.flare_rate_m:.4f} m⁻¹\n"
-            f"Exp = {g.expansion_type}"
+            f"m  = {g.flare_rate_m:.4f} m\u207b\u00b9\n"
+            f"Exp = {g.expansion_type}\n"
+            f"Sez = {n_sec}"
         )
         ax.text(
             0.02, 0.97, summary,

@@ -34,7 +34,7 @@ try:
         QSplitter, QStatusBar, QToolBar, QAction, QFileDialog,
         QMessageBox, QSizePolicy, QApplication
     )
-    from PyQt5.QtCore import Qt, QSize
+    from PyQt5.QtCore import Qt, QSize, QTimer
     from PyQt5.QtGui import QFont, QIcon
     PYQT_AVAILABLE = True
 except ImportError:
@@ -44,7 +44,7 @@ except ImportError:
             QSplitter, QStatusBar, QToolBar, QAction, QFileDialog,
             QMessageBox, QSizePolicy, QApplication
         )
-        from PySide6.QtCore import Qt, QSize
+        from PySide6.QtCore import Qt, QSize, QTimer
         from PySide6.QtGui import QFont, QIcon
         PYQT_AVAILABLE = True
     except ImportError:
@@ -234,10 +234,10 @@ if PYQT_AVAILABLE:
 
         def _on_calculate(self, params: dict):
             if params.get("error") == "no_driver":
-                QMessageBox.warning(
+                QTimer.singleShot(0, lambda: QMessageBox.warning(
                     self, "Driver mancante",
                     "Seleziona un driver dal menu a tendina o dal selettore (...)."
-                )
+                ))
                 return
 
             driver = params["driver"]
@@ -264,7 +264,8 @@ if PYQT_AVAILABLE:
                     n_sections=params.get("n_sections", 8),
                 )
             except Exception as e:
-                QMessageBox.critical(self, "Errore calcolo tromba", str(e))
+                _err = str(e)
+                QTimer.singleShot(0, lambda: QMessageBox.critical(self, "Errore calcolo tromba", _err))
                 return
 
             # 2. Geometria cabinet con eventuale fold / vincoli
@@ -293,7 +294,8 @@ if PYQT_AVAILABLE:
                 else:
                     self._cabinet_geometry = design_straight_horn(self._horn_geometry)
             except Exception as e:
-                QMessageBox.critical(self, "Errore geometria cabinet", str(e))
+                _err = str(e)
+                QTimer.singleShot(0, lambda: QMessageBox.critical(self, "Errore geometria cabinet", _err))
                 return
 
             # 3. Aggiorna tutti i widget
