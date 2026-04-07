@@ -428,11 +428,14 @@ if PYQT_AVAILABLE:
             if not path:
                 return
             try:
-                from ..exporters.pdf_report import generate_report
-                generate_report(
+                from ..exporters.pdf_report import generate_pdf_report
+                project_data = {
+                    "driver": self._driver,
+                }
+                generate_pdf_report(
+                    project_data=project_data,
                     horn_geometry=self._horn_geometry,
-                    cabinet_geometry=self._cabinet_geometry,
-                    driver=self._driver,
+                    cabinet=self._cabinet_geometry,
                     output_path=path,
                 )
                 self.status_bar.showMessage(f"Report PDF esportato: {path}")

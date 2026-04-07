@@ -271,7 +271,8 @@ def calculate_coupling_volume(
         x = np.linspace(0, horn_length_m, 200)
         areas = np.array([area_at_position(xi, throat_area_m2, flare_rate_m, expansion_type)
                           for xi in x])
-        return np.trapz(areas, x)
+        _trapz = getattr(np, "trapezoid", np.trapz)  # NumPy ≥2.0 / <2.0 compat
+        return _trapz(areas, x)
 
 
 def calculate_horn_sections(
