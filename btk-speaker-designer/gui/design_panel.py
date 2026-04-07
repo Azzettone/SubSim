@@ -10,14 +10,14 @@ Contiene:
 
 try:
     from PyQt5.QtWidgets import (
-        QWidget, QVBoxLayout, QFormLayout, QGroupBox,
+        QWidget, QVBoxLayout, QGridLayout, QFrame,
         QLabel, QComboBox, QDoubleSpinBox
     )
     from PyQt5.QtCore import Qt, pyqtSignal as Signal
     from PyQt5.QtGui import QFont
 except ImportError:
     from PySide6.QtWidgets import (
-        QWidget, QVBoxLayout, QFormLayout, QGroupBox,
+        QWidget, QVBoxLayout, QGridLayout, QFrame,
         QLabel, QComboBox, QDoubleSpinBox
     )
     from PySide6.QtCore import Qt, Signal
@@ -31,97 +31,125 @@ from ..core.constants import (
 
 class DesignPanel(QWidget):
     """
-    Pannello inferiore sinistro: parametri di configurazione del design.
+    Pannello inferiore sinistro: geometria, parametri fisici, riepilogo cabinet.
     Emette geometry_changed quando l'utente cambia la geometria.
     """
 
     geometry_changed = Signal(str)
 
+    _GEOM_DESCRIPTIONS = {
+        GEOMETRY_STRAIGHT: "Dritta — lunghezza massima, costruzione semplice.",
+        GEOMETRY_FOLDED:   "Piega U — profondità dimezzata.",
+        GEOMETRY_2FOLDED:  "2 Pieghe — massima compattezza.",
+    }
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._build_ui()
 
+    # ── Utility ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _section_label(text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setStyleSheet(
+            "color: #7C9EF0; font-size: 11px; font-weight: bold;"
+            "border-bottom: 1px solid #2A2A44; padding-bottom: 2px;"
+        )
+        return lbl
+
+    @staticmethod
+    def _hsep() -> QFrame:
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setStyleSheet("color: #2A2A44;")
+        line.setFixedHeight(1)
+        return line
+
+    # ── Build UI ──────────────────────────────────────────────────────────────
+
     def _build_ui(self):
-        self.setMinimumWidth(390)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 6, 10, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(0)
 
-        # ── Geometria tromba ───────────────────────────────────────────────
-        group_geom = QGroupBox("Geometria Cabinet")
-        form_geom = QFormLayout(group_geom)
-        form_geom.setSpacing(7)
-        form_geom.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        grid = QGridLayout()
+        grid.setVerticalSpacing(5)
+        grid.setHorizontalSpacing(8)
+        grid.setColumnStretch(1, 1)
+        layout.addLayout(grid)
 
+        row = 0
+
+        # ══ GEOMETRIA CABINET ════════════════════════════════════════════
+        grid.addWidget(self._section_label("GEOMETRIA CABINET"), row, 0, 1, 2)
+        row += 1
+
+        grid.addWidget(QLabel("Geometria:"), row, 0)
         self.geometry_combo = QComboBox()
         for g in GEOMETRY_TYPES:
             self.geometry_combo.addItem(GEOMETRY_LABELS[g], g)
         self.geometry_combo.currentIndexChanged.connect(
             lambda: self.geometry_changed.emit(self.geometry_combo.currentData())
         )
-        form_geom.addRow("Geometria:", self.geometry_combo)
-
-        # Descrizione geometria selezionata
-        self.geom_desc_label = QLabel(
-            "Tromba dritta — massima lunghezza, costruzione semplice."
-        )
-        self.geom_desc_label.setWordWrap(True)
-        self.geom_desc_label.setStyleSheet("color: #808080; font-size: 11px;")
-        form_geom.addRow(self.geom_desc_label)
         self.geometry_combo.currentIndexChanged.connect(self._update_geom_desc)
+        grid.addWidget(self.geometry_combo, row, 1)
+        row += 1
 
-        layout.addWidget(group_geom)
+        self.geom_desc_label = QLabel(self._GEOM_DESCRIPTIONS[GEOMETRY_STRAIGHT])
+        self.geom_desc_label.setWordWrap(True)
+        self.geom_desc_label.setStyleSheet("color: #707090; font-size: 10px;")
+        grid.addWidget(self.geom_desc_label, row, 0, 1, 2)
+        row += 1
 
-        # ── Parametri fisici ───────────────────────────────────────────────
-        group_phys = QGroupBox("Parametri Fisici")
-        form_phys = QFormLayout(group_phys)
-        form_phys.setSpacing(7)
-        form_phys.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        grid.addWidget(self._hsep(), row, 0, 1, 2)
+        row += 1
 
+        # ══ PARAMETRI FISICI ═════════════════════════════════════════════
+        grid.addWidget(self._section_label("PARAMETRI FISICI"), row, 0, 1, 2)
+        row += 1
+
+        grid.addWidget(QLabel("Temperatura:"), row, 0)
         self.temperature_spin = QDoubleSpinBox()
         self.temperature_spin.setRange(-20, 50)
         self.temperature_spin.setValue(16.8)
         self.temperature_spin.setSuffix(" °C")
         self.temperature_spin.setDecimals(1)
-        self.temperature_spin.setToolTip(
-            "Temperatura dell'aria. Influenza la velocità del suono "
-            "e quindi il flare rate e la lunghezza della tromba.\n"
-            "Default: 16.8°C (valore del foglio originale)"
-        )
-        form_phys.addRow("Temperatura aria:", self.temperature_spin)
+        self.temperature_spin.setToolTip("Influenza velocità del suono e flare rate. Default: 16.8°C")
+        grid.addWidget(self.temperature_spin, row, 1)
+        row += 1
 
+        grid.addWidget(QLabel("Prezzo legno:"), row, 0)
         self.price_spin = QDoubleSpinBox()
         self.price_spin.setRange(0, 500)
         self.price_spin.setValue(30.0)
         self.price_spin.setSuffix(" €/m²")
         self.price_spin.setDecimals(2)
-        self.price_spin.setToolTip("Prezzo del pannello MDF per m² — usato per la stima costo materiali")
-        form_phys.addRow("Prezzo legno:", self.price_spin)
+        self.price_spin.setToolTip("Prezzo MDF per m² — stima costo materiali")
+        grid.addWidget(self.price_spin, row, 1)
+        row += 1
 
-        layout.addWidget(group_phys)
+        grid.addWidget(self._hsep(), row, 0, 1, 2)
+        row += 1
 
-        # ── Riepilogo dimensioni (aggiornato dopo calcolo) ─────────────────
-        group_summary = QGroupBox("Dimensioni Cabinet")
-        summary_layout = QVBoxLayout(group_summary)
+        # ══ RIEPILOGO CABINET ════════════════════════════════════════════
+        grid.addWidget(self._section_label("DIMENSIONI CABINET"), row, 0, 1, 2)
+        row += 1
 
         self.summary_label = QLabel("—\n—\n—")
         self.summary_label.setAlignment(Qt.AlignLeft)
         self.summary_label.setStyleSheet(
-            "font-family: monospace; font-size: 12px; color: #C0C0E0;"
+            "font-family: monospace; font-size: 11px; color: #C0C0E0;"
+            "background: #1A1A2E; border-radius: 3px; padding: 6px;"
         )
         self.summary_label.setWordWrap(True)
-        summary_layout.addWidget(self.summary_label)
+        grid.addWidget(self.summary_label, row, 0, 1, 2)
+        row += 1
 
-        layout.addWidget(group_summary)
+        grid.setRowStretch(row, 1)
         layout.addStretch()
 
-    # ── Slot interni ──────────────────────────────────────────────────────────
-
-    _GEOM_DESCRIPTIONS = {
-        GEOMETRY_STRAIGHT: "Tromba dritta — massima lunghezza, costruzione semplice.",
-        GEOMETRY_FOLDED:   "Una piega a U — riduce la profondità del cabinet a metà.",
-        GEOMETRY_2FOLDED:  "Due pieghe — massima compattezza, costruzione più complessa.",
-    }
+    # ── Slot ─────────────────────────────────────────────────────────────────
 
     def _update_geom_desc(self):
         g = self.geometry_combo.currentData()
@@ -131,9 +159,9 @@ class DesignPanel(QWidget):
 
     def get_params(self) -> dict:
         return {
-            "geometry_type":  self.geometry_combo.currentData(),
-            "temperature_c":  self.temperature_spin.value(),
-            "wood_price":     self.price_spin.value(),
+            "geometry_type": self.geometry_combo.currentData(),
+            "temperature_c": self.temperature_spin.value(),
+            "wood_price":    self.price_spin.value(),
         }
 
     def set_params(self, params: dict):
@@ -148,22 +176,18 @@ class DesignPanel(QWidget):
             self.price_spin.setValue(params["wood_price"])
 
     def update_cabinet_summary(self, cabinet):
-        """
-        Aggiorna il riepilogo dimensioni dopo un calcolo.
-        cabinet: CabinetGeometry
-        """
         geom_labels = {
             GEOMETRY_STRAIGHT: "Straight",
-            GEOMETRY_FOLDED: "Folded",
-            GEOMETRY_2FOLDED: "2-Folded",
+            GEOMETRY_FOLDED:   "Folded",
+            GEOMETRY_2FOLDED:  "2-Folded",
         }
         g_label = geom_labels.get(cabinet.geometry_type, cabinet.geometry_type)
         cost = cabinet.total_cost(self.price_spin.value())
         self.summary_label.setText(
-            f"Tipo:       {g_label}\n"
-            f"L × A × P:  {cabinet.total_width_mm:.0f} × "
-            f"{cabinet.total_height_mm:.0f} × "
+            f"Tipo:   {g_label}\n"
+            f"L×A×P:  {cabinet.total_width_mm:.0f}×"
+            f"{cabinet.total_height_mm:.0f}×"
             f"{cabinet.total_depth_mm:.0f} mm\n"
-            f"Volume:     {cabinet.volume_m3 * 1000:.1f} L\n"
-            f"Costo MDF:  € {cost:.2f}"
+            f"Vol:    {cabinet.volume_m3 * 1000:.1f} L  |  "
+            f"MDF: €{cost:.0f}"
         )

@@ -11,21 +11,21 @@ Contiene:
 
 try:
     from PyQt5.QtWidgets import (
-        QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
-        QGroupBox, QLabel, QComboBox, QDoubleSpinBox,
+        QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+        QFrame, QScrollArea, QLabel, QComboBox, QDoubleSpinBox,
         QPushButton, QSizePolicy, QDialog, QDialogButtonBox,
         QTableWidget, QTableWidgetItem, QHeaderView, QSplitter,
-        QTextBrowser, QLineEdit
+        QTextBrowser, QLineEdit, QFormLayout, QGroupBox
     )
     from PyQt5.QtCore import Qt, pyqtSignal as Signal
     from PyQt5.QtGui import QFont
 except ImportError:
     from PySide6.QtWidgets import (
-        QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
-        QGroupBox, QLabel, QComboBox, QDoubleSpinBox,
+        QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+        QFrame, QScrollArea, QLabel, QComboBox, QDoubleSpinBox,
         QPushButton, QSizePolicy, QDialog, QDialogButtonBox,
         QTableWidget, QTableWidgetItem, QHeaderView, QSplitter,
-        QTextBrowser, QLineEdit
+        QTextBrowser, QLineEdit, QFormLayout, QGroupBox
     )
     from PySide6.QtCore import Qt, Signal
     from PySide6.QtGui import QFont
@@ -227,127 +227,187 @@ class InputPanel(QWidget):
         self._selected_driver: DriverModel = None
         self._build_ui()
 
-    def _build_ui(self):
-        self.setMinimumWidth(390)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 6)
-        layout.setSpacing(8)
+    # ── Utility: crea un separatore di sezione ────────────────────────────
+    @staticmethod
+    def _section_label(text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setStyleSheet(
+            "color: #7C9EF0; font-size: 11px; font-weight: bold;"
+            "border-bottom: 1px solid #2A2A44; padding-bottom: 2px;"
+        )
+        return lbl
 
-        # ── Tipo speaker ───────────────────────────────────────────────────
-        group_type = QGroupBox("Tipo Speaker")
-        form_type = QFormLayout(group_type)
-        form_type.setSpacing(6)
+    def _build_ui(self):
+        # Layout esterno: scroll + pulsante fisso in fondo
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # ── Area scorrevole ────────────────────────────────────────────────
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        outer.addWidget(scroll, 1)
+
+        # Widget interno allo scroll
+        inner = QWidget()
+        grid = QGridLayout(inner)
+        grid.setContentsMargins(10, 10, 10, 6)
+        grid.setVerticalSpacing(5)
+        grid.setHorizontalSpacing(8)
+        grid.setColumnStretch(1, 1)   # colonna widget si espande
+        scroll.setWidget(inner)
+
+        row = 0
+
+        # ══ TIPO SPEAKER ══════════════════════════════════════════════════
+        grid.addWidget(self._section_label("TIPO SPEAKER"), row, 0, 1, 2)
+        row += 1
 
         self.type_combo = QComboBox()
-        self.type_combo.addItem("🔊  Subwoofer (SUB)", SPEAKER_TYPE_SUB)
-        self.type_combo.addItem("📢  Compression Driver (CD)", SPEAKER_TYPE_CD)
-        self.type_combo.addItem("🎵  Fullrange (CD + SUB)", SPEAKER_TYPE_FULLRANGE)
+        self.type_combo.addItem("Subwoofer (SUB)", SPEAKER_TYPE_SUB)
+        self.type_combo.addItem("Compression Driver (CD)", SPEAKER_TYPE_CD)
+        self.type_combo.addItem("Fullrange (CD+SUB)", SPEAKER_TYPE_FULLRANGE)
         self.type_combo.currentIndexChanged.connect(self._on_type_changed)
-        form_type.addRow("Tipo:", self.type_combo)
-        layout.addWidget(group_type)
+        grid.addWidget(self.type_combo, row, 0, 1, 2)
+        row += 1
 
-        # ── Selezione driver ───────────────────────────────────────────────
-        group_driver = QGroupBox("Driver")
-        driver_layout = QVBoxLayout(group_driver)
-        driver_layout.setSpacing(4)
+        grid.addWidget(self._hsep(), row, 0, 1, 2)
+        row += 1
 
-        driver_row = QHBoxLayout()
+        # ══ DRIVER ════════════════════════════════════════════════════════
+        grid.addWidget(self._section_label("DRIVER"), row, 0, 1, 2)
+        row += 1
+
         self.driver_combo = QComboBox()
         self.driver_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.driver_combo.currentIndexChanged.connect(self._on_driver_combo_changed)
-        driver_row.addWidget(self.driver_combo, 1)
-
         browse_btn = QPushButton("...")
-        browse_btn.setFixedWidth(34)
-        browse_btn.setToolTip("Apri selettore driver completo con dettagli T&S")
+        browse_btn.setFixedWidth(32)
+        browse_btn.setToolTip("Selettore driver completo con parametri T&S")
         browse_btn.clicked.connect(self._open_driver_picker)
-        driver_row.addWidget(browse_btn)
-        driver_layout.addLayout(driver_row)
+        driver_row_w = QWidget()
+        driver_row_l = QHBoxLayout(driver_row_w)
+        driver_row_l.setContentsMargins(0, 0, 0, 0)
+        driver_row_l.setSpacing(4)
+        driver_row_l.addWidget(self.driver_combo, 1)
+        driver_row_l.addWidget(browse_btn)
+        grid.addWidget(driver_row_w, row, 0, 1, 2)
+        row += 1
 
         self.driver_info_label = QLabel("Nessun driver selezionato")
-        self.driver_info_label.setStyleSheet("color: #808080; font-size: 11px;")
+        self.driver_info_label.setStyleSheet("color: #707090; font-size: 11px;")
         self.driver_info_label.setWordWrap(True)
-        driver_layout.addWidget(self.driver_info_label)
-        layout.addWidget(group_driver)
+        grid.addWidget(self.driver_info_label, row, 0, 1, 2)
+        row += 1
 
-        # ── Parametri tromba ───────────────────────────────────────────────
-        group_horn = QGroupBox("Parametri Tromba")
-        form_horn = QFormLayout(group_horn)
-        form_horn.setSpacing(7)
-        form_horn.setRowWrapPolicy(QFormLayout.WrapLongRows)
-        form_horn.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        grid.addWidget(self._hsep(), row, 0, 1, 2)
+        row += 1
 
+        # ══ PARAMETRI TROMBA ══════════════════════════════════════════════
+        grid.addWidget(self._section_label("PARAMETRI TROMBA"), row, 0, 1, 2)
+        row += 1
+
+        grid.addWidget(QLabel("Fc taglio:"), row, 0)
         self.fc_spin = QDoubleSpinBox()
         self.fc_spin.setRange(10, 2000)
         self.fc_spin.setValue(70.0)
         self.fc_spin.setSuffix(" Hz")
         self.fc_spin.setDecimals(1)
-        self.fc_spin.setToolTip("Frequenza di taglio (-3dB) della tromba")
-        form_horn.addRow("Fc taglio:", self.fc_spin)
+        self.fc_spin.setToolTip("Frequenza di taglio -3dB della tromba")
+        grid.addWidget(self.fc_spin, row, 1)
+        row += 1
 
+        grid.addWidget(QLabel("Espansione:"), row, 0)
         self.expansion_combo = QComboBox()
         for exp_type in EXPANSION_TYPES:
             self.expansion_combo.addItem(EXPANSION_LABELS[exp_type], exp_type)
-        form_horn.addRow("Espansione:", self.expansion_combo)
+        grid.addWidget(self.expansion_combo, row, 1)
+        row += 1
 
+        grid.addWidget(QLabel("Sm/Sg ratio:"), row, 0)
         self.ratio_spin = QDoubleSpinBox()
         self.ratio_spin.setRange(1.1, 200.0)
         self.ratio_spin.setValue(2.0)
         self.ratio_spin.setDecimals(2)
-        self.ratio_spin.setToolTip("Rapporto area bocca / area gola (S_bocca / S_gola)")
-        form_horn.addRow("Rapporto Sm/Sg:", self.ratio_spin)
+        self.ratio_spin.setToolTip("Rapporto area bocca / area gola")
+        grid.addWidget(self.ratio_spin, row, 1)
+        row += 1
 
+        grid.addWidget(QLabel("Compressione:"), row, 0)
         self.compression_spin = QDoubleSpinBox()
         self.compression_spin.setRange(1.0, 50.0)
         self.compression_spin.setValue(1.0)
         self.compression_spin.setDecimals(1)
         self.compression_spin.setToolTip(
-            "Rapporto di compressione gola (Sd/Sgola).\n"
-            "1.0 per subwoofer, tipicamente 3-10 per compression driver."
+            "Rapporto compressione gola (Sd/Sgola).\n"
+            "1.0 per SUB, 3-10 per Compression Driver."
         )
-        form_horn.addRow("Compr. gola:", self.compression_spin)
-        layout.addWidget(group_horn)
+        grid.addWidget(self.compression_spin, row, 1)
+        row += 1
 
-        # ── Vincoli dimensionali ───────────────────────────────────────────
-        group_constr = QGroupBox("Vincoli Dimensionali  (0 = nessun limite)")
-        form_constr = QFormLayout(group_constr)
-        form_constr.setSpacing(7)
-        form_constr.setRowWrapPolicy(QFormLayout.WrapLongRows)
-        form_constr.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        grid.addWidget(self._hsep(), row, 0, 1, 2)
+        row += 1
 
+        # ══ VINCOLI DIMENSIONALI ══════════════════════════════════════════
+        grid.addWidget(self._section_label("VINCOLI DIMENSIONALI  (0 = nessun limite)"), row, 0, 1, 2)
+        row += 1
+
+        grid.addWidget(QLabel("Larghezza max:"), row, 0)
         self.max_width_spin = QDoubleSpinBox()
         self.max_width_spin.setRange(0, 5000)
         self.max_width_spin.setValue(0)
         self.max_width_spin.setSuffix(" mm")
-        form_constr.addRow("Larghezza max:", self.max_width_spin)
+        grid.addWidget(self.max_width_spin, row, 1)
+        row += 1
 
+        grid.addWidget(QLabel("Altezza max:"), row, 0)
         self.max_height_spin = QDoubleSpinBox()
         self.max_height_spin.setRange(0, 5000)
         self.max_height_spin.setValue(0)
         self.max_height_spin.setSuffix(" mm")
-        form_constr.addRow("Altezza max:", self.max_height_spin)
+        grid.addWidget(self.max_height_spin, row, 1)
+        row += 1
 
+        grid.addWidget(QLabel("Profondità max:"), row, 0)
         self.max_depth_spin = QDoubleSpinBox()
         self.max_depth_spin.setRange(0, 5000)
         self.max_depth_spin.setValue(0)
         self.max_depth_spin.setSuffix(" mm")
-        form_constr.addRow("Profondità max:", self.max_depth_spin)
-        layout.addWidget(group_constr)
+        grid.addWidget(self.max_depth_spin, row, 1)
+        row += 1
 
-        layout.addStretch()
+        # Spazio finale
+        grid.setRowStretch(row, 1)
 
-        # ── Pulsante Calcola ───────────────────────────────────────────────
+        # ── Pulsante Calcola fisso in fondo (fuori dallo scroll) ───────────
         self.calc_btn = QPushButton("⚙  Calcola")
-        self.calc_btn.setMinimumHeight(44)
+        self.calc_btn.setMinimumHeight(42)
         font = QFont()
         font.setPointSize(11)
         font.setBold(True)
         self.calc_btn.setFont(font)
+        self.calc_btn.setStyleSheet(
+            "QPushButton { background-color: #2A4A8A; border: none;"
+            " border-radius: 4px; color: #E0E8FF; }"
+            "QPushButton:hover { background-color: #3A5AAA; }"
+            "QPushButton:pressed { background-color: #1A3A6A; }"
+        )
         self.calc_btn.clicked.connect(self._on_calculate)
-        layout.addWidget(self.calc_btn)
+        outer.addWidget(self.calc_btn)
 
         # Carica driver iniziali (SUB di default)
         self._reload_driver_combo(SPEAKER_TYPE_SUB)
+
+    @staticmethod
+    def _hsep() -> QFrame:
+        """Separatore orizzontale sottile."""
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setStyleSheet("color: #2A2A44;")
+        line.setFixedHeight(1)
+        return line
 
     # ── Slot interni ──────────────────────────────────────────────────────────
 
