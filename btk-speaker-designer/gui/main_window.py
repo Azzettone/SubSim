@@ -221,7 +221,7 @@ if PYQT_AVAILABLE:
             # ── Connessione segnali ────────────────────────────────────────
             self.input_panel.calculate_requested.connect(self._on_calculate)
             self.input_panel.driver_changed.connect(self._on_driver_changed)
-            self.design_panel.geometry_changed.connect(self._on_geometry_changed)
+            self.input_panel.geometry_changed.connect(self._on_geometry_changed)
 
         def _build_status_bar(self):
             self.status_bar = QStatusBar()
@@ -244,7 +244,7 @@ if PYQT_AVAILABLE:
             self._driver = driver
 
             # Velocità del suono in funzione della temperatura
-            temp_c = self.design_panel.get_params()["temperature_c"]
+            temp_c = 16.8  # temperatura di default (orignal Excel: 16.8°C)
             try:
                 from shared.acoustic_core import speed_of_sound
                 c = speed_of_sound(temp_c)
@@ -261,15 +261,15 @@ if PYQT_AVAILABLE:
                     throat_compression_ratio=params["compression_ratio"],
                     expansion_type=params["expansion_type"],
                     c=c,
+                    n_sections=params.get("n_sections", 8),
                 )
             except Exception as e:
                 QMessageBox.critical(self, "Errore calcolo tromba", str(e))
                 return
 
             # 2. Geometria cabinet con eventuale fold / vincoli
-            design_params = self.design_panel.get_params()
-            geometry_type = design_params["geometry_type"]
-            wood_price    = design_params["wood_price"]
+            geometry_type = params.get("geometry_type", "straight")
+            wood_price    = 30.0  # costo MDF di default €/m²
 
             from ..core.constraint_solver import DimensionalConstraints, solve_with_constraints
             from ..core.geometry import (
@@ -337,7 +337,7 @@ if PYQT_AVAILABLE:
 
                 self.horn_view.update_horn(self._horn_geometry, self._cabinet_geometry)
                 self.design_panel.update_cabinet_summary(self._cabinet_geometry)
-                wood_price = self.design_panel.get_params()["wood_price"]
+                wood_price = 30.0  # costo MDF di default €/m²
                 self.analysis_tabs.panel_list_tab.update(self._cabinet_geometry, wood_price)
             except Exception as e:
                 self.status_bar.showMessage(f"Errore cambio geometria: {e}")

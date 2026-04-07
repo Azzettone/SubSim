@@ -1,47 +1,37 @@
 """
-Pannello sinistro inferiore: Parametri di modifica design.
+Pannello sinistro inferiore: Riepilogo dimensioni cabinet.
 
-Contiene:
-  - Selezione geometria cabinet (Straight / Folded / 2-Folded)
-  - Temperatura aria (influenza velocità del suono)
-  - Prezzo legno (per stima costo materiali)
-  - Riepilogo dimensioni cabinet (aggiornato dopo ogni calcolo)
+Mostra le dimensioni calcolate del cabinet (aggiornate dopo ogni calcolo).
+La geometria e i parametri fisici sono ora gestiti in InputPanel.
 """
 
 try:
     from PyQt5.QtWidgets import (
-        QWidget, QVBoxLayout, QGridLayout, QFrame,
-        QLabel, QComboBox, QDoubleSpinBox
+        QWidget, QVBoxLayout, QGridLayout, QFrame, QLabel
     )
-    from PyQt5.QtCore import Qt, pyqtSignal as Signal
+    from PyQt5.QtCore import Qt
     from PyQt5.QtGui import QFont
 except ImportError:
     from PySide6.QtWidgets import (
-        QWidget, QVBoxLayout, QGridLayout, QFrame,
-        QLabel, QComboBox, QDoubleSpinBox
+        QWidget, QVBoxLayout, QGridLayout, QFrame, QLabel
     )
-    from PySide6.QtCore import Qt, Signal
+    from PySide6.QtCore import Qt
     from PySide6.QtGui import QFont
 
 from ..core.constants import (
     GEOMETRY_STRAIGHT, GEOMETRY_FOLDED, GEOMETRY_2FOLDED,
-    GEOMETRY_LABELS, GEOMETRY_TYPES,
 )
+
+# Valori di default usati nei calcoli (non esposti in UI)
+_WOOD_PRICE_DEFAULT = 30.0    # €/m²
+_TEMPERATURE_DEFAULT = 16.8   # °C
 
 
 class DesignPanel(QWidget):
     """
-    Pannello inferiore sinistro: geometria, parametri fisici, riepilogo cabinet.
-    Emette geometry_changed quando l'utente cambia la geometria.
+    Pannello inferiore sinistro: riepilogo dimensioni cabinet.
+    Aggiornato da main_window dopo ogni calcolo.
     """
-
-    geometry_changed = Signal(str)
-
-    _GEOM_DESCRIPTIONS = {
-        GEOMETRY_STRAIGHT: "Dritta — lunghezza massima, costruzione semplice.",
-        GEOMETRY_FOLDED:   "Piega U — profondità dimezzata.",
-        GEOMETRY_2FOLDED:  "2 Pieghe — massima compattezza.",
-    }
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -81,57 +71,6 @@ class DesignPanel(QWidget):
 
         row = 0
 
-        # ══ GEOMETRIA CABINET ════════════════════════════════════════════
-        grid.addWidget(self._section_label("GEOMETRIA CABINET"), row, 0, 1, 2)
-        row += 1
-
-        grid.addWidget(QLabel("Geometria:"), row, 0)
-        self.geometry_combo = QComboBox()
-        for g in GEOMETRY_TYPES:
-            self.geometry_combo.addItem(GEOMETRY_LABELS[g], g)
-        self.geometry_combo.currentIndexChanged.connect(
-            lambda: self.geometry_changed.emit(self.geometry_combo.currentData())
-        )
-        self.geometry_combo.currentIndexChanged.connect(self._update_geom_desc)
-        grid.addWidget(self.geometry_combo, row, 1)
-        row += 1
-
-        self.geom_desc_label = QLabel(self._GEOM_DESCRIPTIONS[GEOMETRY_STRAIGHT])
-        self.geom_desc_label.setWordWrap(True)
-        self.geom_desc_label.setStyleSheet("color: #707090; font-size: 10px;")
-        grid.addWidget(self.geom_desc_label, row, 0, 1, 2)
-        row += 1
-
-        grid.addWidget(self._hsep(), row, 0, 1, 2)
-        row += 1
-
-        # ══ PARAMETRI FISICI ═════════════════════════════════════════════
-        grid.addWidget(self._section_label("PARAMETRI FISICI"), row, 0, 1, 2)
-        row += 1
-
-        grid.addWidget(QLabel("Temperatura:"), row, 0)
-        self.temperature_spin = QDoubleSpinBox()
-        self.temperature_spin.setRange(-20, 50)
-        self.temperature_spin.setValue(16.8)
-        self.temperature_spin.setSuffix(" °C")
-        self.temperature_spin.setDecimals(1)
-        self.temperature_spin.setToolTip("Influenza velocità del suono e flare rate. Default: 16.8°C")
-        grid.addWidget(self.temperature_spin, row, 1)
-        row += 1
-
-        grid.addWidget(QLabel("Prezzo legno:"), row, 0)
-        self.price_spin = QDoubleSpinBox()
-        self.price_spin.setRange(0, 500)
-        self.price_spin.setValue(30.0)
-        self.price_spin.setSuffix(" €/m²")
-        self.price_spin.setDecimals(2)
-        self.price_spin.setToolTip("Prezzo MDF per m² — stima costo materiali")
-        grid.addWidget(self.price_spin, row, 1)
-        row += 1
-
-        grid.addWidget(self._hsep(), row, 0, 1, 2)
-        row += 1
-
         # ══ RIEPILOGO CABINET ════════════════════════════════════════════
         grid.addWidget(self._section_label("DIMENSIONI CABINET"), row, 0, 1, 2)
         row += 1
@@ -149,31 +88,17 @@ class DesignPanel(QWidget):
         grid.setRowStretch(row, 1)
         layout.addStretch()
 
-    # ── Slot ─────────────────────────────────────────────────────────────────
-
-    def _update_geom_desc(self):
-        g = self.geometry_combo.currentData()
-        self.geom_desc_label.setText(self._GEOM_DESCRIPTIONS.get(g, ""))
-
     # ── API pubblica ──────────────────────────────────────────────────────────
 
     def get_params(self) -> dict:
         return {
-            "geometry_type": self.geometry_combo.currentData(),
-            "temperature_c": self.temperature_spin.value(),
-            "wood_price":    self.price_spin.value(),
+            "wood_price":    _WOOD_PRICE_DEFAULT,
+            "temperature_c": _TEMPERATURE_DEFAULT,
         }
 
     def set_params(self, params: dict):
-        if "geometry_type" in params:
-            for i in range(self.geometry_combo.count()):
-                if self.geometry_combo.itemData(i) == params["geometry_type"]:
-                    self.geometry_combo.setCurrentIndex(i)
-                    break
-        if "temperature_c" in params:
-            self.temperature_spin.setValue(params["temperature_c"])
-        if "wood_price" in params:
-            self.price_spin.setValue(params["wood_price"])
+        """Compatibilità con salvataggio progetti — nessun widget da ripristinare."""
+        pass
 
     def update_cabinet_summary(self, cabinet):
         geom_labels = {
@@ -182,7 +107,7 @@ class DesignPanel(QWidget):
             GEOMETRY_2FOLDED:  "2-Folded",
         }
         g_label = geom_labels.get(cabinet.geometry_type, cabinet.geometry_type)
-        cost = cabinet.total_cost(self.price_spin.value())
+        cost = cabinet.total_cost(_WOOD_PRICE_DEFAULT)
         self.summary_label.setText(
             f"Tipo:   {g_label}\n"
             f"L×A×P:  {cabinet.total_width_mm:.0f}×"

@@ -12,7 +12,7 @@ Contiene:
 try:
     from PyQt5.QtWidgets import (
         QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-        QFrame, QScrollArea, QLabel, QComboBox, QDoubleSpinBox,
+        QFrame, QScrollArea, QLabel, QComboBox, QDoubleSpinBox, QSpinBox,
         QPushButton, QSizePolicy, QDialog, QDialogButtonBox,
         QTableWidget, QTableWidgetItem, QHeaderView, QSplitter,
         QTextBrowser, QLineEdit, QFormLayout, QGroupBox
@@ -22,7 +22,7 @@ try:
 except ImportError:
     from PySide6.QtWidgets import (
         QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-        QFrame, QScrollArea, QLabel, QComboBox, QDoubleSpinBox,
+        QFrame, QScrollArea, QLabel, QComboBox, QDoubleSpinBox, QSpinBox,
         QPushButton, QSizePolicy, QDialog, QDialogButtonBox,
         QTableWidget, QTableWidgetItem, QHeaderView, QSplitter,
         QTextBrowser, QLineEdit, QFormLayout, QGroupBox
@@ -33,6 +33,7 @@ except ImportError:
 from ..core.constants import (
     SPEAKER_TYPE_SUB, SPEAKER_TYPE_CD, SPEAKER_TYPE_FULLRANGE,
     EXPANSION_TYPES, EXPANSION_LABELS, EXPANSION_EXPONENTIAL,
+    GEOMETRY_TYPES, GEOMETRY_LABELS, GEOMETRY_STRAIGHT,
 )
 from ..core.driver_model import DriverModel
 from ..database.db_manager import (
@@ -220,6 +221,7 @@ class InputPanel(QWidget):
 
     calculate_requested = Signal(dict)   # dizionario con tutti i parametri
     driver_changed = Signal(object)      # DriverModel selezionato
+    geometry_changed = Signal(str)       # geometria cabinet cambiata
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -315,7 +317,11 @@ class InputPanel(QWidget):
         self.fc_spin.setValue(70.0)
         self.fc_spin.setSuffix(" Hz")
         self.fc_spin.setDecimals(1)
-        self.fc_spin.setToolTip("Frequenza di taglio -3dB della tromba")
+        self.fc_spin.setToolTip(
+            "Frequenza di taglio -3dB della tromba.\n"
+            "Nel foglio Excel originale: 70 Hz (bass horn).\n"
+            "Determina il flare rate: m = 4\u03c0 \u00b7 Fc / c."
+        )
         grid.addWidget(self.fc_spin, row, 1)
         row += 1
 
@@ -323,6 +329,12 @@ class InputPanel(QWidget):
         self.expansion_combo = QComboBox()
         for exp_type in EXPANSION_TYPES:
             self.expansion_combo.addItem(EXPANSION_LABELS[exp_type], exp_type)
+        self.expansion_combo.setToolTip(
+            "Tipo di espansione del profilo della tromba.\n"
+            "Esponenziale: S(x) = S\u2080 \u00b7 e^(m\u00b7x) \u2014 il tipo pi\u00f9 usato per sub.\n"
+            "Conical: espansione lineare.\n"
+            "Tractrix / Hypex: profili avanzati per compression driver."
+        )
         grid.addWidget(self.expansion_combo, row, 1)
         row += 1
 
@@ -331,7 +343,11 @@ class InputPanel(QWidget):
         self.ratio_spin.setRange(1.1, 200.0)
         self.ratio_spin.setValue(2.0)
         self.ratio_spin.setDecimals(2)
-        self.ratio_spin.setToolTip("Rapporto area bocca / area gola")
+        self.ratio_spin.setToolTip(
+            "Rapporto area bocca / area gola (Smouth / Sthroat).\n"
+            "Nel foglio Excel originale: 2.0 (relativo a Sd del driver).\n"
+            "Valori maggiori \u2192 tromba pi\u00f9 lunga ma risposta pi\u00f9 estesa in frequenza."
+        )
         grid.addWidget(self.ratio_spin, row, 1)
         row += 1
 
@@ -341,48 +357,92 @@ class InputPanel(QWidget):
         self.compression_spin.setValue(1.0)
         self.compression_spin.setDecimals(1)
         self.compression_spin.setToolTip(
-            "Rapporto compressione gola (Sd/Sgola).\n"
-            "1.0 per SUB, 3-10 per Compression Driver."
+            "Rapporto di compressione alla gola: Sd_driver / S_gola.\n"
+            "1.0 = nessuna compressione (tipico per subwoofer).\n"
+            "3\u201310 = compression driver (alta pressione alla gola)."
         )
         grid.addWidget(self.compression_spin, row, 1)
+        row += 1
+
+        grid.addWidget(QLabel("N. sezioni:"), row, 0)
+        self.n_sections_spin = QSpinBox()
+        self.n_sections_spin.setRange(4, 50)
+        self.n_sections_spin.setValue(8)
+        self.n_sections_spin.setToolTip(
+            "Numero di sezioni esponenziali del profilo della tromba.\n"
+            "Nel foglio Excel originale: 8 sezioni (L1\u2013L8).\n"
+            "Pi\u00f9 sezioni \u2192 profilo pi\u00f9 preciso e visualizzazione 2D pi\u00f9 dettagliata."
+        )
+        grid.addWidget(self.n_sections_spin, row, 1)
         row += 1
 
         grid.addWidget(self._hsep(), row, 0, 1, 2)
         row += 1
 
-        # ══ VINCOLI DIMENSIONALI ══════════════════════════════════════════
-        grid.addWidget(self._section_label("VINCOLI DIMENSIONALI  (0 = nessun limite)"), row, 0, 1, 2)
+        # ══ DIMENSIONI BOCCA / TROMBA ═════════════════════════════════════
+        grid.addWidget(self._section_label("DIMENSIONI BOCCA / TROMBA  (0 = libero)"), row, 0, 1, 2)
         row += 1
 
-        grid.addWidget(QLabel("Larghezza max:"), row, 0)
+        grid.addWidget(QLabel("Larghezza bocca:"), row, 0)
         self.max_width_spin = QDoubleSpinBox()
         self.max_width_spin.setRange(0, 5000)
         self.max_width_spin.setValue(0)
         self.max_width_spin.setSuffix(" mm")
+        self.max_width_spin.setToolTip("Larghezza massima della bocca (mm). 0 = nessun limite.")
         grid.addWidget(self.max_width_spin, row, 1)
         row += 1
 
-        grid.addWidget(QLabel("Altezza max:"), row, 0)
+        grid.addWidget(QLabel("Altezza bocca:"), row, 0)
         self.max_height_spin = QDoubleSpinBox()
         self.max_height_spin.setRange(0, 5000)
         self.max_height_spin.setValue(0)
         self.max_height_spin.setSuffix(" mm")
+        self.max_height_spin.setToolTip("Altezza massima della bocca (mm). 0 = nessun limite.")
         grid.addWidget(self.max_height_spin, row, 1)
         row += 1
 
-        grid.addWidget(QLabel("Profondità max:"), row, 0)
-        self.max_depth_spin = QDoubleSpinBox()
-        self.max_depth_spin.setRange(0, 5000)
-        self.max_depth_spin.setValue(0)
-        self.max_depth_spin.setSuffix(" mm")
-        grid.addWidget(self.max_depth_spin, row, 1)
+        grid.addWidget(QLabel("Lunghezza tromba:"), row, 0)
+        self.max_length_spin = QDoubleSpinBox()
+        self.max_length_spin.setRange(0, 5000)
+        self.max_length_spin.setValue(0)
+        self.max_length_spin.setSuffix(" mm")
+        self.max_length_spin.setToolTip(
+            "Lunghezza massima della tromba / profondit\u00e0 cabinet (mm).\n"
+            "Per tromba dritta coincide con la profondit\u00e0 del cabinet.\n"
+            "0 = nessun limite."
+        )
+        grid.addWidget(self.max_length_spin, row, 1)
         row += 1
 
-        # Spazio finale
+        # Spazio finale nello scroll
         grid.setRowStretch(row, 1)
 
+        # ── Geometria cabinet (fra scroll e pulsante Calcola) ──────────────
+        geom_row = QWidget()
+        geom_grid = QGridLayout(geom_row)
+        geom_grid.setContentsMargins(10, 4, 10, 2)
+        geom_grid.setVerticalSpacing(4)
+        geom_grid.setHorizontalSpacing(8)
+        geom_grid.setColumnStretch(1, 1)
+        geom_grid.addWidget(self._section_label("GEOMETRIA CABINET"), 0, 0, 1, 2)
+        geom_grid.addWidget(QLabel("Geometria:"), 1, 0)
+        self.geometry_combo = QComboBox()
+        for g in GEOMETRY_TYPES:
+            self.geometry_combo.addItem(GEOMETRY_LABELS[g], g)
+        self.geometry_combo.setToolTip(
+            "Tipo di piegatura della tromba nel cabinet.\n"
+            "Dritta: massima fedelt\u00e0, cabinet profondo.\n"
+            "Folded (U): profondit\u00e0 dimezzata con 1 piega.\n"
+            "2-Folded: massima compattezza con 2 pieghe."
+        )
+        self.geometry_combo.currentIndexChanged.connect(
+            lambda: self.geometry_changed.emit(self.geometry_combo.currentData())
+        )
+        geom_grid.addWidget(self.geometry_combo, 1, 1)
+        outer.addWidget(geom_row)
+
         # ── Pulsante Calcola fisso in fondo (fuori dallo scroll) ───────────
-        self.calc_btn = QPushButton("⚙  Calcola")
+        self.calc_btn = QPushButton("\u2699  Calcola")
         self.calc_btn.setMinimumHeight(42)
         font = QFont()
         font.setPointSize(11)
@@ -498,9 +558,11 @@ class InputPanel(QWidget):
             "expansion_type":     self.expansion_combo.currentData(),
             "smouth_ratio":       self.ratio_spin.value(),
             "compression_ratio":  self.compression_spin.value(),
+            "n_sections":         self.n_sections_spin.value(),
+            "geometry_type":      self.geometry_combo.currentData(),
             "max_width_mm":       self.max_width_spin.value() or None,
             "max_height_mm":      self.max_height_spin.value() or None,
-            "max_depth_mm":       self.max_depth_spin.value() or None,
+            "max_depth_mm":       self.max_length_spin.value() or None,
         }
 
     def set_params(self, params: dict):
@@ -521,12 +583,19 @@ class InputPanel(QWidget):
             self.ratio_spin.setValue(params["smouth_ratio"])
         if "compression_ratio" in params:
             self.compression_spin.setValue(params["compression_ratio"])
+        if "n_sections" in params:
+            self.n_sections_spin.setValue(params["n_sections"])
+        if "geometry_type" in params:
+            for i in range(self.geometry_combo.count()):
+                if self.geometry_combo.itemData(i) == params["geometry_type"]:
+                    self.geometry_combo.setCurrentIndex(i)
+                    break
         if "max_width_mm" in params and params["max_width_mm"]:
             self.max_width_spin.setValue(params["max_width_mm"])
         if "max_height_mm" in params and params["max_height_mm"]:
             self.max_height_spin.setValue(params["max_height_mm"])
         if "max_depth_mm" in params and params["max_depth_mm"]:
-            self.max_depth_spin.setValue(params["max_depth_mm"])
+            self.max_length_spin.setValue(params["max_depth_mm"])
         if "driver_model" in params:
             d = get_driver_by_model(params["driver_model"])
             if d:
