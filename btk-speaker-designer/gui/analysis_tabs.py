@@ -104,7 +104,7 @@ class PhaseMagnitudeTab(QWidget):
             layout.addWidget(QLabel("Matplotlib non disponibile."))
             return
 
-        self.fig = Figure(facecolor=C_BG, tight_layout=True)
+        self.fig = Figure(facecolor=C_BG, constrained_layout=True)
         self.canvas = FigureCanvas(self.fig)
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(self.canvas)
@@ -177,7 +177,6 @@ class PhaseMagnitudeTab(QWidget):
         ax_pha.set_xlim(20, 20000)
         ax_pha.set_ylim(-5, 100)
 
-        self.fig.tight_layout(pad=1.0)
         self.canvas.draw()
 
 
@@ -203,7 +202,7 @@ class ImpedanceTab(QWidget):
             layout.addWidget(QLabel("Matplotlib non disponibile."))
             return
 
-        self.fig = Figure(facecolor=C_BG, tight_layout=True)
+        self.fig = Figure(facecolor=C_BG, constrained_layout=True)
         self.canvas = FigureCanvas(self.fig)
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(self.canvas)
@@ -271,7 +270,6 @@ class ImpedanceTab(QWidget):
         ax.legend(fontsize=8, framealpha=0.35, facecolor=C_BG,
                   edgecolor=C_GRID, labelcolor=C_TEXT)
 
-        self.fig.tight_layout(pad=1.0)
         self.canvas.draw()
 
 

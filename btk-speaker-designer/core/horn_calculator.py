@@ -409,9 +409,11 @@ def horn_frequency_response(
 
     # Risposta in ampiezza: passa-alto del secondo ordine
     # Sopra fc: guadagno dipende dall'espansione
+    # np.maximum evita log10(valore<=0) per freq vicine a fc
+    ratio_sq = np.where(frequencies > 0, (fc / frequencies) ** 2, 1.0)
     amplitude_db = np.where(
         frequencies > fc,
-        10 * np.log10(1 - (fc / frequencies) ** 2),
+        10 * np.log10(np.maximum(1e-10, 1.0 - ratio_sq)),
         -60.0  # sotto fc: forte attenuazione
     )
 

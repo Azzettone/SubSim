@@ -198,7 +198,8 @@ if PYQT_AVAILABLE:
             self.design_panel = DesignPanel(self)
             self.left_vsplit.addWidget(self.input_panel)
             self.left_vsplit.addWidget(self.design_panel)
-            self.left_vsplit.setSizes([480, 280])
+            self.left_vsplit.setSizes([530, 300])
+            self.left_vsplit.setMinimumWidth(410)
 
             self.hsplit.addWidget(self.left_vsplit)
 
@@ -206,15 +207,16 @@ if PYQT_AVAILABLE:
             from .horn_view import HornView
             self.horn_view = HornView(self)
             self.hsplit.addWidget(self.horn_view)
-            self.hsplit.setSizes([320, 900])
+            self.hsplit.setSizes([430, 870])
 
             self.vsplit.addWidget(top_widget)
 
             # ── Tab di analisi in basso ────────────────────────────────────
             from .analysis_tabs import AnalysisTabs
             self.analysis_tabs = AnalysisTabs(self)
+            self.analysis_tabs.setMinimumHeight(200)
             self.vsplit.addWidget(self.analysis_tabs)
-            self.vsplit.setSizes([530, 280])
+            self.vsplit.setSizes([480, 400])
 
             # ── Connessione segnali ────────────────────────────────────────
             self.input_panel.calculate_requested.connect(self._on_calculate)

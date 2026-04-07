@@ -228,6 +228,7 @@ class InputPanel(QWidget):
         self._build_ui()
 
     def _build_ui(self):
+        self.setMinimumWidth(390)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 6)
         layout.setSpacing(8)
@@ -272,7 +273,9 @@ class InputPanel(QWidget):
         # ── Parametri tromba ───────────────────────────────────────────────
         group_horn = QGroupBox("Parametri Tromba")
         form_horn = QFormLayout(group_horn)
-        form_horn.setSpacing(6)
+        form_horn.setSpacing(7)
+        form_horn.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        form_horn.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
 
         self.fc_spin = QDoubleSpinBox()
         self.fc_spin.setRange(10, 2000)
@@ -292,7 +295,7 @@ class InputPanel(QWidget):
         self.ratio_spin.setValue(2.0)
         self.ratio_spin.setDecimals(2)
         self.ratio_spin.setToolTip("Rapporto area bocca / area gola (S_bocca / S_gola)")
-        form_horn.addRow("Rapporto bocca/gola:", self.ratio_spin)
+        form_horn.addRow("Rapporto Sm/Sg:", self.ratio_spin)
 
         self.compression_spin = QDoubleSpinBox()
         self.compression_spin.setRange(1.0, 50.0)
@@ -302,13 +305,15 @@ class InputPanel(QWidget):
             "Rapporto di compressione gola (Sd/Sgola).\n"
             "1.0 per subwoofer, tipicamente 3-10 per compression driver."
         )
-        form_horn.addRow("Compressione gola:", self.compression_spin)
+        form_horn.addRow("Compr. gola:", self.compression_spin)
         layout.addWidget(group_horn)
 
         # ── Vincoli dimensionali ───────────────────────────────────────────
         group_constr = QGroupBox("Vincoli Dimensionali  (0 = nessun limite)")
         form_constr = QFormLayout(group_constr)
-        form_constr.setSpacing(6)
+        form_constr.setSpacing(7)
+        form_constr.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        form_constr.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
 
         self.max_width_spin = QDoubleSpinBox()
         self.max_width_spin.setRange(0, 5000)

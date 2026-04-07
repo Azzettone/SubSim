@@ -42,6 +42,7 @@ class DesignPanel(QWidget):
         self._build_ui()
 
     def _build_ui(self):
+        self.setMinimumWidth(390)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 6, 10, 10)
         layout.setSpacing(8)
@@ -49,7 +50,8 @@ class DesignPanel(QWidget):
         # ── Geometria tromba ───────────────────────────────────────────────
         group_geom = QGroupBox("Geometria Cabinet")
         form_geom = QFormLayout(group_geom)
-        form_geom.setSpacing(6)
+        form_geom.setSpacing(7)
+        form_geom.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
 
         self.geometry_combo = QComboBox()
         for g in GEOMETRY_TYPES:
@@ -73,7 +75,8 @@ class DesignPanel(QWidget):
         # ── Parametri fisici ───────────────────────────────────────────────
         group_phys = QGroupBox("Parametri Fisici")
         form_phys = QFormLayout(group_phys)
-        form_phys.setSpacing(6)
+        form_phys.setSpacing(7)
+        form_phys.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
 
         self.temperature_spin = QDoubleSpinBox()
         self.temperature_spin.setRange(-20, 50)
