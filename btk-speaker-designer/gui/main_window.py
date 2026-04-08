@@ -72,6 +72,7 @@ if PYQT_AVAILABLE:
             self._horn_geometry = None
             self._cabinet_geometry = None
             self._driver = None
+            self._last_simulation = None
 
             self._apply_style()
             self._build_toolbar()
@@ -203,9 +204,9 @@ if PYQT_AVAILABLE:
 
             self.hsplit.addWidget(self.left_vsplit)
 
-            # Grafica 2D a destra
-            from .horn_view import HornView
-            self.horn_view = HornView(self)
+            # Area grafica destra: 4 tab (TOP / FRONT / SIDE / 3D)
+            from .horn_view_tabs import HornViewTabs
+            self.horn_view = HornViewTabs(self)
             self.hsplit.addWidget(self.horn_view)
             self.hsplit.setSizes([430, 870])
 
@@ -222,7 +223,7 @@ if PYQT_AVAILABLE:
             self.input_panel.calculate_requested.connect(self._on_calculate)
             self.input_panel.driver_changed.connect(self._on_driver_changed)
             self.input_panel.geometry_changed.connect(self._on_geometry_changed)
-
+            self.horn_view.sections_modified.connect(self._on_sections_modified)
         def _build_status_bar(self):
             self.status_bar = QStatusBar()
             self.setStatusBar(self.status_bar)
@@ -299,23 +300,73 @@ if PYQT_AVAILABLE:
                 QTimer.singleShot(0, lambda: QMessageBox.critical(self, "Errore geometria cabinet", _err))
                 return
 
-            # 3. Aggiorna tutti i widget
+            # 3. Simulazione acustica completa (T&S + tromba TMM + perdite BL)
+            simulation = None
+            try:
+                from ..core.simulation_engine import simulate
+                simulation = simulate(self._horn_geometry, driver,
+                                      input_power_w=1.0, c=c)
+                self._last_simulation = simulation
+            except Exception as e:
+                self.status_bar.showMessage(f"Avviso simulazione: {e}")
+
+            # 4. Aggiorna tutti i widget
             self.horn_view.update_horn(self._horn_geometry, self._cabinet_geometry)
             self.analysis_tabs.update_all(
-                self._horn_geometry, self._cabinet_geometry, driver, wood_price
+                self._horn_geometry, self._cabinet_geometry, driver, wood_price,
+                simulation=simulation
             )
             self.design_panel.update_cabinet_summary(self._cabinet_geometry)
+            if simulation is not None:
+                self.design_panel.update_physics_warnings(simulation)
 
-            g = self._horn_geometry
+            g   = self._horn_geometry
             cab = self._cabinet_geometry
+            sim_info = ""
+            if simulation is not None:
+                import numpy as _np
+                spl_peak = float(_np.nanmax(simulation.spl_db))
+                sim_info = f"  │  SPL max = {spl_peak:.1f} dB"
+                if simulation.warnings:
+                    sim_info += f"  ⚠ {len(simulation.warnings)} warning"
             self.status_bar.showMessage(
                 f"Driver: {driver.manufacturer} {driver.model}  │  "
                 f"Fc = {g.cutoff_frequency_hz:.0f} Hz  │  "
                 f"L = {g.horn_length_m*100:.1f} cm  │  "
                 f"m = {g.flare_rate_m:.4f} m⁻¹  │  "
                 f"Cabinet: {cab.total_width_mm:.0f}×{cab.total_height_mm:.0f}×"
-                f"{cab.total_depth_mm:.0f} mm"
+                f"{cab.total_depth_mm:.0f} mm{sim_info}"
             )
+
+        def _on_sections_modified(self, custom_sections: list):
+            """
+            Drag interattivo sui punti di sezione nel plot 2D:
+            ricalcola SPL/fase/impedenza con le sezioni modificate.
+            """
+            if self._horn_geometry is None or self._driver is None:
+                return
+            try:
+                from ..core.simulation_engine import simulate_from_custom_sections
+                sim = simulate_from_custom_sections(
+                    self._horn_geometry, self._driver, custom_sections,
+                    input_power_w=1.0
+                )
+                self._last_simulation = sim
+                self.analysis_tabs.update_from_simulation(
+                    sim,
+                    horn_geometry=self._horn_geometry,
+                    driver=self._driver
+                )
+                self.design_panel.update_physics_warnings(sim)
+                spl_peak = float(__import__('numpy').nanmax(sim.spl_db))
+                warn_tag = f"  ⚠ {len(sim.warnings)}" if sim.warnings else ""
+                self.status_bar.showMessage(
+                    f"[Sezioni custom]  SPL max = {spl_peak:.1f} dB  │  "
+                    f"Re = {sim.reynolds_throat:.0f}  │  "
+                    f"BL loss = {sim.boundary_layer_loss_avg_db:.2f} dB{warn_tag}"
+                )
+            except Exception as exc:
+                self.status_bar.showMessage(f"Errore ricalcolo sezioni: {exc}")
 
         def _on_driver_changed(self, driver):
             """Aggiorna la curva impedenza appena cambia il driver."""

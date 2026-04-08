@@ -71,18 +71,48 @@ def _setup_ax(ax, title: str, xlabel: str, ylabel: str):
     ax.grid(True, color=C_GRID, linewidth=0.5, alpha=0.8)
 
 
+def _smooth_1_6_oct(freqs: np.ndarray, values: np.ndarray) -> np.ndarray:
+    """
+    Smoothing 1/6 ottava: per ogni frequenza media i valori entro ±1/12 ottava.
+    1/6 ottava = factor 2^(1/6); metà banda = 2^(1/12).
+
+    Args:
+        freqs:  array frequenze in Hz (monotono crescente)
+        values: array valori da lisciare (stessa lunghezza)
+
+    Returns:
+        array lisciato (stessa forma di values)
+    """
+    smoothed = np.empty_like(values, dtype=float)
+    half_band = 2.0 ** (1.0 / 12.0)   # √(2^(1/6)) — metà banda 1/6 oct
+    for i, f in enumerate(freqs):
+        f_lo = f / half_band
+        f_hi = f * half_band
+        mask = (freqs >= f_lo) & (freqs <= f_hi)
+        if np.any(mask):
+            smoothed[i] = float(np.mean(values[mask]))
+        else:
+            smoothed[i] = values[i]
+    return smoothed
+
+
 # ─── Tab 1: Phase / Magnitude ────────────────────────────────────────────────
 
 class PhaseMagnitudeTab(QWidget):
     """
-    Grafico a doppio pannello:
-      - Superiore: risposta in ampiezza (dB) vs frequenza (scala log)
-      - Inferiore: risposta in fase (°) vs frequenza (scala log)
-    Opzione checkbox per sovrapporre la somma fronte/retro.
+    Plot a 3 pannelli dal motore di simulazione completo:
+      - SPL assoluto (dB) — calcolato con T&S + tromba TMM + perdite BL
+      - Fase totale (°) — unwrapped
+      - Ritardo di gruppo (ms)
+
+    Il plot si aggiorna automaticamente ogni volta che si chiama update().
+    Le perdite fluidodinamiche (Kirchhoff 1868) sono già integrate nel SPL.
+    Gli eventuali warnings fisici appaiono come testo in overlay.
     """
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._simulation = None
         self._horn_geometry = None
         self._driver = None
         self._build_ui()
@@ -92,12 +122,16 @@ class PhaseMagnitudeTab(QWidget):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
 
-        # Controllo opzionale somma fronte/retro
         ctrl_row = QHBoxLayout()
         self.back_rad_check = QCheckBox("Mostra somma fronte/retro")
         ctrl_row.addWidget(self.back_rad_check)
         self.back_rad_check.stateChanged.connect(self._redraw)
-        ctrl_row.addStretch()
+        self._warn_label = QLabel("")
+        self._warn_label.setStyleSheet(
+            "color: #FF9040; font-size: 10px; padding-left: 8px;"
+        )
+        self._warn_label.setWordWrap(True)
+        ctrl_row.addWidget(self._warn_label, 1)
         layout.addLayout(ctrl_row)
 
         if not MATPLOTLIB_AVAILABLE:
@@ -112,42 +146,130 @@ class PhaseMagnitudeTab(QWidget):
 
     def _draw_placeholder(self):
         self.fig.clear()
-        ax = self.fig.add_subplot(111)
-        _setup_ax(ax, "Phase / Magnitude", "Frequenza (Hz)", "SPL (dB)")
-        ax.text(0.5, 0.5, "Calcola una geometria per vedere la risposta",
-                ha="center", va="center", color=C_SUBTLE,
-                fontsize=11, transform=ax.transAxes)
+        ax1 = self.fig.add_subplot(211)
+        _setup_ax(ax1, "Magnitudine + Fase  (1/6 oct smooth)", "Frequenza (Hz)", "SPL (dB)")
+        ax1.text(0.5, 0.5, "Calcola una geometria per attivare il motore di simulazione",
+                 ha="center", va="center", color=C_SUBTLE,
+                 fontsize=10, transform=ax1.transAxes)
+        ax2 = self.fig.add_subplot(212)
+        _setup_ax(ax2, "Ritardo di gruppo", "Frequenza (Hz)", "GD (ms)")
         self.canvas.draw()
 
+    # ── API pubblica ─────────────────────────────────────────────────────
+
     def update(self, horn_geometry, driver=None):
+        """Ricalcola con il simulation engine e ridisegna."""
         self._horn_geometry = horn_geometry
         self._driver = driver
+        self._simulation = None
+        if MATPLOTLIB_AVAILABLE and horn_geometry is not None and driver is not None:
+            self._run_simulation_and_draw()
+        elif MATPLOTLIB_AVAILABLE and horn_geometry is not None:
+            # Nessun driver: usa il vecchio fallback passabasso
+            self._redraw_fallback()
+
+    def update_from_simulation(self, sim_result):
+        """Aggiorna il plot con un SimulationResult già calcolato (es. da drag)."""
+        self._simulation = sim_result
         if MATPLOTLIB_AVAILABLE:
             self._redraw()
 
+    # ── Simulazione ──────────────────────────────────────────────────────
+
+    def _run_simulation_and_draw(self):
+        try:
+            from ..core.simulation_engine import simulate
+            self._simulation = simulate(self._horn_geometry, self._driver)
+        except Exception as exc:
+            self._simulation = None
+            self._warn_label.setText(f"Errore simulazione: {exc}")
+        self._redraw()
+
     def _redraw(self):
-        if self._horn_geometry is None:
-            return
+        if self._simulation is not None:
+            self._draw_from_simulation(self._simulation)
+        elif self._horn_geometry is not None:
+            self._redraw_fallback()
 
-        from ..core.horn_calculator import horn_frequency_response
-
+    def _draw_from_simulation(self, sim):
+        """
+        Layout 2 pannelli:
+          Pannello 1: Magnitudine (linea continua, asse Y sinistro, dB)
+                    + Fase (linea tratteggiata, asse Y destro, °)
+                    — entrambi con smoothing 1/6 ottava
+          Pannello 2: Ritardo di gruppo (ms)
+        """
         self.fig.clear()
+        freqs = sim.frequencies
+        fc    = self._horn_geometry.cutoff_frequency_hz if self._horn_geometry else 70.0
+
+        # ── Pannello 1: Magnitudine + Fase ───────────────────────────────
         ax_mag = self.fig.add_subplot(211)
-        ax_pha = self.fig.add_subplot(212)
+        ax_pha = ax_mag.twinx()   # asse Y destro per la fase
 
-        freqs = np.logspace(np.log10(20), np.log10(20000), 600)
-        amp_db, phase_rad = horn_frequency_response(freqs, self._horn_geometry)
+        driver_label = ""
+        if self._driver:
+            driver_label = f" — {self._driver.manufacturer} {self._driver.model}"
+        ax_mag.set_title(
+            f"Magnitudine + Fase (1/6 oct){driver_label}",
+            color=C_TEXT, fontsize=10, pad=8
+        )
 
-        # ── Ampiezza ────────────────────────────────────────────────────
-        _setup_ax(ax_mag, "Risposta in Ampiezza", "", "SPL relativo (dB)")
-        ax_mag.semilogx(freqs, amp_db, color=C_BLUE, linewidth=1.8, label="Ampiezza")
-        fc = self._horn_geometry.cutoff_frequency_hz
-        ax_mag.axvline(x=fc, color=C_ORANGE, linewidth=1.2, linestyle="--",
-                       label=f"Fc = {fc:.0f} Hz")
+        # Smoothing 1/6 ottava
+        spl_smooth   = _smooth_1_6_oct(freqs, sim.spl_db)
+        phase_smooth = _smooth_1_6_oct(freqs, sim.phase_deg)
+
+        # Magnitudine — linea continua (asse sinistro)
+        ln_spl, = ax_mag.semilogx(freqs, spl_smooth,
+                                   color=C_BLUE, linewidth=2.0,
+                                   label="SPL (1/6 oct)")
+        ax_mag.set_facecolor(C_AX)
+        ax_mag.set_xlabel("", color=C_SUBTLE, fontsize=9)
+        ax_mag.set_ylabel("SPL (dB)", color=C_BLUE, fontsize=9)
+        ax_mag.tick_params(axis="y", colors=C_BLUE, labelsize=8)
+        ax_mag.tick_params(axis="x", colors=C_SUBTLE, labelsize=8)
+        for sp in ax_mag.spines.values():
+            sp.set_color(C_GRID)
+        ax_mag.grid(True, color=C_GRID, linewidth=0.5, alpha=0.8)
+        ax_mag.spines["left"].set_color(C_BLUE)
+
+        spl_max = np.nanmax(spl_smooth)
+        spl_min = max(spl_max - 50.0, np.nanmin(spl_smooth))
         ax_mag.set_xlim(20, 20000)
-        ax_mag.set_ylim(-70, 5)
-        ax_mag.legend(fontsize=8, framealpha=0.35, facecolor=C_BG,
-                      edgecolor=C_GRID, labelcolor=C_TEXT)
+        ax_mag.set_ylim(spl_min - 3, spl_max + 3)
+
+        # Fase — linea tratteggiata (asse destro)
+        ln_pha, = ax_pha.semilogx(freqs, phase_smooth,
+                                   color=C_PURPLE, linewidth=1.6,
+                                   linestyle="--", label="Fase (1/6 oct)")
+        ax_pha.set_ylabel("Fase (°)", color=C_PURPLE, fontsize=9)
+        ax_pha.tick_params(axis="y", colors=C_PURPLE, labelsize=8)
+        ax_pha.spines["right"].set_color(C_PURPLE)
+        ax_pha.set_xlim(20, 20000)
+
+        # Linea Fc
+        ax_mag.axvline(x=fc, color=C_ORANGE, linewidth=1.0, linestyle=":",
+                       alpha=0.7, label=f"Fc={fc:.0f}Hz")
+
+        # Legenda combinata
+        lines  = [ln_spl, ln_pha]
+        labels = [l.get_label() for l in lines]
+        ax_mag.legend(lines, labels, fontsize=7.5, framealpha=0.35,
+                      facecolor=C_BG, edgecolor=C_GRID, labelcolor=C_TEXT,
+                      loc="lower right")
+
+        # Info fisica compatta
+        info_parts = []
+        if sim.boundary_layer_loss_avg_db > 0.01:
+            info_parts.append(f"BL={sim.boundary_layer_loss_avg_db:.2f}dB")
+        if sim.reynolds_throat > 0:
+            info_parts.append(f"Re={sim.reynolds_throat:.0f}")
+        if sim.goldberg_throat > 0:
+            info_parts.append(f"Γ={sim.goldberg_throat:.3f}")
+        if info_parts:
+            ax_mag.text(0.01, 0.04, "  ".join(info_parts),
+                        ha="left", va="bottom", transform=ax_mag.transAxes,
+                        color=C_SUBTLE, fontsize=7.5)
 
         # Somma fronte/retro opzionale
         if self.back_rad_check.isChecked() and self._driver is not None:
@@ -161,22 +283,59 @@ class PhaseMagnitudeTab(QWidget):
                     back_radiation_open=True,
                     damping_factor=0.5,
                 )
-                ax_mag.semilogx(freqs, result.combined_spl - self._driver.spl_1w_1m,
-                                color=C_GREEN, linewidth=1.4, linestyle="--",
-                                label="Combinato (fronte+retro)")
-                ax_mag.legend(fontsize=8, framealpha=0.35, facecolor=C_BG,
-                              edgecolor=C_GRID, labelcolor=C_TEXT)
+                ref_idx = np.argmin(np.abs(freqs - 1000))
+                offset  = spl_smooth[ref_idx] - result.combined_spl[ref_idx]
+                ax_mag.semilogx(freqs, result.combined_spl + offset,
+                                color=C_GREEN, linewidth=1.3, linestyle="-.",
+                                label="Fronte+Retro", alpha=0.8)
             except Exception:
                 pass
 
-        # ── Fase ────────────────────────────────────────────────────────
-        _setup_ax(ax_pha, "Risposta in Fase", "Frequenza (Hz)", "Fase (°)")
-        phase_deg = np.degrees(phase_rad)
-        ax_pha.semilogx(freqs, phase_deg, color=C_PURPLE, linewidth=1.8)
+        # ── Pannello 2: Ritardo di gruppo ─────────────────────────────────
+        ax_gd = self.fig.add_subplot(212)
+        ax_gd.set_facecolor(C_AX)
+        _setup_ax(ax_gd, "Ritardo di gruppo", "Frequenza (Hz)", "GD (ms)")
+
+        gd_raw     = np.clip(sim.group_delay_ms, -20, 50)
+        gd_smooth  = _smooth_1_6_oct(freqs, gd_raw)
+        ax_gd.semilogx(freqs, gd_smooth,
+                       color=C_GREEN, linewidth=1.8, label="GD (1/6 oct)")
+        ax_gd.axhline(y=0, color=C_GRID, linewidth=0.6, linestyle=":")
+        ax_gd.axvline(x=fc, color=C_ORANGE, linewidth=1.0, linestyle=":", alpha=0.7)
+        ax_gd.set_xlim(20, 20000)
+        ax_gd.legend(fontsize=7.5, framealpha=0.35, facecolor=C_BG,
+                     edgecolor=C_GRID, labelcolor=C_TEXT)
+
+        # ── Warnings ─────────────────────────────────────────────────────
+        if sim.warnings:
+            short = " | ".join(w.split("]")[0] + "]" for w in sim.warnings[:3])
+            self._warn_label.setText(short)
+        else:
+            self._warn_label.setText("")
+
+        self.fig.tight_layout(pad=1.2)
+        self.canvas.draw()
+
+    def _redraw_fallback(self):
+        """Fallback senza driver: vecchio filtro passa-alto."""
+        from ..core.horn_calculator import horn_frequency_response
+        self.fig.clear()
+        ax_mag = self.fig.add_subplot(211)
+        ax_pha = self.fig.add_subplot(212)
+        freqs = np.logspace(np.log10(20), np.log10(20000), 600)
+        amp_db, phase_rad = horn_frequency_response(freqs, self._horn_geometry)
+        fc = self._horn_geometry.cutoff_frequency_hz
+        _setup_ax(ax_mag, "Risposta tromba (no driver)", "", "Gain (dB)")
+        ax_mag.semilogx(freqs, amp_db, color=C_BLUE, linewidth=1.8)
+        ax_mag.axvline(x=fc, color=C_ORANGE, linewidth=1.2, linestyle="--",
+                       label=f"Fc = {fc:.0f} Hz")
+        ax_mag.set_xlim(20, 20000)
+        ax_mag.legend(fontsize=8, framealpha=0.35, facecolor=C_BG,
+                      edgecolor=C_GRID, labelcolor=C_TEXT)
+        _setup_ax(ax_pha, "Fase", "Frequenza (Hz)", "Fase (°)")
+        ax_pha.semilogx(freqs, np.degrees(phase_rad), color=C_PURPLE, linewidth=1.8)
         ax_pha.axvline(x=fc, color=C_ORANGE, linewidth=1.2, linestyle="--")
         ax_pha.set_xlim(20, 20000)
-        ax_pha.set_ylim(-5, 100)
-
         self.canvas.draw()
 
 
@@ -219,58 +378,89 @@ class ImpedanceTab(QWidget):
 
     def update(self, driver=None, horn_geometry=None):
         self._driver = driver
+        self._horn_geometry = horn_geometry
         if MATPLOTLIB_AVAILABLE and driver is not None:
             self._draw_impedance()
 
-    def _draw_impedance(self):
-        d = self._driver
-        freqs = np.logspace(np.log10(10), np.log10(20000), 800)
+    def update_from_simulation(self, sim_result):
+        """Aggiorna impedanza con i dati del SimulationResult (tromba caricata)."""
+        if MATPLOTLIB_AVAILABLE and sim_result is not None:
+            self._draw_impedance_from_sim(sim_result)
 
-        # Modello impedenza elettrica — circuito equivalente T&S
-        # Zmec = meccanical mobility converted to electrical impedance
-        omega = 2 * np.pi * freqs
-
-        # Impedenza bobina: Re + j·ω·Le
-        Z_coil = d.re + 1j * omega * (d.le * 1e-3)
-
-        # Risonanza meccanica → picco di impedenza a Fs
-        # Motional impedance: Zmot = BL² / Zmec
-        # Zmec = Rms + j·(ω·Mms - 1/(ω·Cms))
-        omega_s = 2 * np.pi * d.fs
-        mms_kg = d.mms * 1e-3
-        # Cms da Vas e Sd (se non disponibile, stima da Qms/Qes)
-        if d.vas > 0 and d.sd > 0:
-            rho, c = 1.225, 343.0
-            cms = (d.vas * 1e-3) / (rho * c**2 * d.sd**2)
-        else:
-            cms = 1.0 / (mms_kg * omega_s**2)
-
-        # Rms da Qms: Qms = omega_s * Mms / Rms
-        rms = (omega_s * mms_kg) / d.qms if d.qms > 0 else 1.0
-
-        Z_mec = rms + 1j * (omega * mms_kg - 1.0 / (omega * cms + 1e-30))
-        Z_mot = (d.bl ** 2) / Z_mec
-
-        Z_total = Z_coil + Z_mot
-        Z_mag = np.abs(Z_total)
+    def _draw_impedance_from_sim(self, sim):
+        """Impedenza elettrica con carico acustico della tromba integrato."""
+        freqs = sim.frequencies
+        Z_free = np.abs(sim.z_electrical_complex)  # già calcolata dal sim engine
 
         self.fig.clear()
         ax = self.fig.add_subplot(111)
-        _setup_ax(ax, f"Curva Impedenza — {d.manufacturer} {d.model}",
+        driver_label = ""
+        if self._driver:
+            driver_label = f" — {self._driver.manufacturer} {self._driver.model}"
+        _setup_ax(ax, f"Impedenza elettrica (con carico tromba){driver_label}",
                   "Frequenza (Hz)", "|Z| (Ω)")
 
-        ax.semilogx(freqs, Z_mag, color=C_BLUE, linewidth=2.0, label="|Z(f)|")
-        ax.axvline(x=d.fs, color=C_ORANGE, linewidth=1.2, linestyle="--",
-                   label=f"Fs = {d.fs:.0f} Hz")
-        ax.axhline(y=d.impedance_nominal, color=C_GREEN, linewidth=0.8,
-                   linestyle=":", alpha=0.8, label=f"Znom = {d.impedance_nominal:.0f} Ω")
+        # Impedenza libera (solo driver, senza tromba)
+        self._draw_impedance(ax_override=ax, freqs_override=freqs, label_free=True)
+
+        # Impedenza con carico tromba
+        ax.semilogx(freqs, Z_free, color=C_GREEN, linewidth=2.0,
+                    label="|Z| con tromba")
+
+        if self._driver:
+            ax.axvline(x=self._driver.fs, color=C_ORANGE, linewidth=1.0,
+                       linestyle="--", alpha=0.7, label=f"Fs = {self._driver.fs:.0f} Hz")
 
         ax.set_xlim(10, 20000)
-        ax.set_ylim(0, max(Z_mag) * 1.2)
         ax.legend(fontsize=8, framealpha=0.35, facecolor=C_BG,
                   edgecolor=C_GRID, labelcolor=C_TEXT)
-
         self.canvas.draw()
+
+    def _draw_impedance(self, ax_override=None, freqs_override=None, label_free=False):
+        """Curva impedenza driver libero (circuito T&S, senza carico tromba)."""
+        d = self._driver
+        if d is None:
+            return
+
+        freqs = freqs_override if freqs_override is not None else \
+                np.logspace(np.log10(10), np.log10(20000), 800)
+        omega   = 2 * np.pi * freqs
+        omega_s = 2 * np.pi * d.fs
+        mms_kg  = d.mms * 1e-3
+
+        if d.vas > 0 and d.sd > 0:
+            from ..core.constants import AIR_DENSITY, SPEED_OF_SOUND
+            cms = (d.vas * 1e-3) / (AIR_DENSITY * SPEED_OF_SOUND**2 * d.sd**2)
+        else:
+            cms = 1.0 / (mms_kg * omega_s**2 + 1e-30)
+
+        rms   = (omega_s * mms_kg) / max(d.qms, 1e-6)
+        Z_mec = rms + 1j * (omega * mms_kg - 1.0 / (omega * cms + 1e-30))
+        Z_mot = (d.bl ** 2) / Z_mec
+        Z_coil = d.re + 1j * omega * (d.le * 1e-3)
+        Z_total = np.abs(Z_coil + Z_mot)
+
+        if ax_override is not None:
+            ax = ax_override
+            ax.semilogx(freqs, Z_total, color=C_BLUE, linewidth=1.4,
+                        linestyle="--", alpha=0.6,
+                        label="|Z| driver libero" if label_free else "|Z(f)|")
+        else:
+            self.fig.clear()
+            ax = self.fig.add_subplot(111)
+            _setup_ax(ax, f"Curva Impedenza — {d.manufacturer} {d.model}",
+                      "Frequenza (Hz)", "|Z| (Ω)")
+            ax.semilogx(freqs, Z_total, color=C_BLUE, linewidth=2.0, label="|Z(f)|")
+            ax.axvline(x=d.fs, color=C_ORANGE, linewidth=1.2, linestyle="--",
+                       label=f"Fs = {d.fs:.0f} Hz")
+            ax.axhline(y=d.impedance_nominal, color=C_GREEN, linewidth=0.8,
+                       linestyle=":", alpha=0.8,
+                       label=f"Znom = {d.impedance_nominal:.0f} Ω")
+            ax.set_xlim(10, 20000)
+            ax.set_ylim(0, max(Z_total) * 1.2)
+            ax.legend(fontsize=8, framealpha=0.35, facecolor=C_BG,
+                      edgecolor=C_GRID, labelcolor=C_TEXT)
+            self.canvas.draw()
 
 
 # ─── Tab 3: Panel List ───────────────────────────────────────────────────────
@@ -348,6 +538,7 @@ class AnalysisTabs(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._last_simulation = None
         self._build_ui()
 
     def _build_ui(self):
@@ -358,7 +549,7 @@ class AnalysisTabs(QWidget):
         layout.addWidget(self.tab_widget)
 
         self.phase_mag_tab = PhaseMagnitudeTab()
-        self.tab_widget.addTab(self.phase_mag_tab, "Phase / Magnitude")
+        self.tab_widget.addTab(self.phase_mag_tab, "SPL / Phase")
 
         self.impedance_tab = ImpedanceTab()
         self.tab_widget.addTab(self.impedance_tab, "Impedance")
@@ -366,8 +557,41 @@ class AnalysisTabs(QWidget):
         self.panel_list_tab = PanelListTab()
         self.tab_widget.addTab(self.panel_list_tab, "Panel List")
 
-    def update_all(self, horn_geometry, cabinet_geometry, driver, wood_price: float = 30.0):
-        """Aggiorna tutti i tab con i dati del calcolo corrente."""
-        self.phase_mag_tab.update(horn_geometry, driver)
-        self.impedance_tab.update(driver, horn_geometry)
+    def update_all(self, horn_geometry, cabinet_geometry, driver,
+                   wood_price: float = 30.0,
+                   simulation=None):
+        """
+        Aggiorna tutti i tab.
+
+        Args:
+            simulation: SimulationResult opzionale già calcolato.
+                        Se None, PhaseMagnitudeTab esegue la simulazione internamente.
+        """
+        if simulation is not None:
+            self._last_simulation = simulation
+            self.phase_mag_tab._horn_geometry = horn_geometry
+            self.phase_mag_tab._driver = driver
+            self.phase_mag_tab.update_from_simulation(simulation)
+            self.impedance_tab._driver = driver
+            self.impedance_tab._horn_geometry = horn_geometry
+            self.impedance_tab.update_from_simulation(simulation)
+        else:
+            self.phase_mag_tab.update(horn_geometry, driver)
+            self.impedance_tab.update(driver, horn_geometry)
+
         self.panel_list_tab.update(cabinet_geometry, wood_price)
+
+    def update_from_simulation(self, sim_result, horn_geometry=None, driver=None):
+        """
+        Aggiorna solo i tab grafici con un nuovo SimulationResult.
+        Usato dal drag interattivo in horn_view.
+        """
+        self._last_simulation = sim_result
+        if horn_geometry is not None:
+            self.phase_mag_tab._horn_geometry = horn_geometry
+            self.impedance_tab._horn_geometry  = horn_geometry
+        if driver is not None:
+            self.phase_mag_tab._driver = driver
+            self.impedance_tab._driver = driver
+        self.phase_mag_tab.update_from_simulation(sim_result)
+        self.impedance_tab.update_from_simulation(sim_result)
