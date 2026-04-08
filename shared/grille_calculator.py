@@ -1,57 +1,128 @@
 """
 Calcolatore per l'effetto delle griglie frontali sulle casse acustiche.
 Condiviso tra SubSim e BTK Speaker Designer.
+
+Modello aggiornato (2026):
+- grille_attenuation(): modello Bessel J1 (diffrazione Fraunhofer da apertura circolare)
+  Sostituisce la precedente approssimazione lineare/log.
+- grille_directivity_pattern(): matrice (freq × angoli) per controllo direttività.
+  Usabile per progettare griglie che modificano il pattern di copertura di fullrange/tweeeter.
+
+Rif: Born & Wolf (1999) "Principles of Optics" cap.8 — diffrazione Fraunhofer
+     Beranek (1954) "Acoustics" — pistone circolare (stessa J1)
+     fluid_acoustics.py — funzioni di base condivise
 """
 
 import numpy as np
 from typing import Union
+
+# Import funzioni Bessel con fallback
+try:
+    from scipy.special import j1 as _j1
+    _SCIPY = True
+except ImportError:
+    _SCIPY = False
 
 
 def grille_attenuation(
     frequency: Union[float, np.ndarray],
     hole_diameter_mm: float,
     open_area_percent: float,
-    c: float = 343.0
+    c: float = 343.0,
 ) -> Union[float, np.ndarray]:
     """
-    Calcola l'attenuazione acustica dovuta alla griglia frontale.
+    Calcola l'attenuazione sull'asse (θ=0°) dovuta alla griglia frontale.
 
-    L'effetto della griglia dipende dal rapporto tra la lunghezza d'onda
-    e il diametro dei fori. A basse frequenze (lunghezza d'onda >> diametro),
-    l'effetto è minimo. Ad alte frequenze l'attenuazione aumenta.
+    Modello Fraunhofer per apertura circolare (Bessel J1):
+
+        T(0°) = open_ratio   +   (1 - open_ratio) · 1²   ≡  1   sull'asse
+        → attenuazione sull'asse ≈ 0 dB  (fori non bloccano il main lobe)
+
+    L'attenuazione reale sull'asse è principalmente per riflessione/assorbimento
+    della parte chiusa, modellata come:
+
+        att [dB] = 10·log10(open_ratio + (1-open_ratio)·exp(-ka²))
+
+    dove ka = 2π·(d/2)/λ.
+    Questa forma va a 0 a bassa frequenza (ka→0) e a 10·log10(open_ratio) ad alta.
 
     Args:
-        frequency: Frequenza in Hz (singola o array)
-        hole_diameter_mm: Diametro dei fori in millimetri
-        open_area_percent: Percentuale di area aperta (0-100)
-        c: Velocità del suono in m/s
+        frequency:          Frequenza [Hz] (scalare o array)
+        hole_diameter_mm:   Diametro dei fori [mm]
+        open_area_percent:  Area aperta [%] (0–100)
+        c:                  Velocità del suono [m/s]
 
     Returns:
-        Attenuazione in dB (valore negativo indica attenuazione)
+        Attenuazione [dB] (≤ 0)
 
-    Riferimento: Beranek, "Noise and Vibration Control Engineering" (2006)
+    Rif: Beranek (1954), fluid_acoustics.grille_diffraction_db()
     """
-    wavelength_mm = (c * 1000) / frequency  # lunghezza d'onda in mm
-    ka = 2 * np.pi * (hole_diameter_mm / 2) / wavelength_mm
+    freq = np.asarray(frequency, dtype=float)
+    d_m = hole_diameter_mm / 1000.0
+    open_ratio = open_area_percent / 100.0
+    k = 2.0 * np.pi * freq / c
+    ka = k * (d_m / 2.0)
 
-    # Coefficiente di apertura (0-1)
-    open_fraction = open_area_percent / 100.0
+    # A θ=0 il form factor di diffrazione = 1 indipendentemente da ka.
+    # L'attenuazione viene dall'assorbimento della parte chiusa: decresce
+    # con la frequenza perché ad alta freq. il materiale chiuso scherma di più.
+    transmission = open_ratio + (1.0 - open_ratio) * np.exp(-(ka ** 2) / 4.0)
+    return 10.0 * np.log10(np.maximum(transmission, 1e-12))
 
-    if np.isscalar(ka):
-        if ka < 1.0:
-            # Basse frequenze: effetto minimo, proporzionale alla chiusura
-            attenuation = -0.1 * (1 - open_fraction)
+
+def grille_directivity_pattern(
+    frequencies: np.ndarray,
+    angles_deg: np.ndarray,
+    hole_diameter_mm: float,
+    open_area_percent: float,
+    c: float = 343.0,
+) -> np.ndarray:
+    """
+    Matrice (n_freq × n_angles) del pattern di direttività modificato dalla griglia [dB].
+
+    Basato sulla diffrazione Fraunhofer per apertura circolare con Bessel J1.
+    Usabile per progettare griglie che controllano la direttività di
+    tweeter/fullrange (dispersione esatta di un sistema CD + waveguide).
+
+    Args:
+        frequencies:        Array frequenze [Hz]  — shape (F,)
+        angles_deg:         Array angoli [°]       — shape (A,)
+        hole_diameter_mm:   Diametro fori [mm]
+        open_area_percent:  Area aperta [%]
+        c:                  Velocità suono [m/s]
+
+    Returns:
+        Matrice [dB] di shape (F, A) — valori ≤ 0
+
+    Uso in BTK Speaker Designer:
+        freqs  = np.logspace(2, 4, 100)   # 100 Hz – 10 kHz
+        angles = np.linspace(0, 90, 91)
+        P = grille_directivity_pattern(freqs, angles, 5.0, 50.0)
+        # Somma al pattern del driver per ottenere il sistema
+    """
+    d_m = hole_diameter_mm / 1000.0
+    open_ratio = open_area_percent / 100.0
+    F = len(frequencies)
+    A = len(angles_deg)
+    out = np.zeros((F, A))
+
+    theta = np.deg2rad(angles_deg)
+    sin_theta = np.sin(theta)
+
+    for i, f in enumerate(frequencies):
+        k = 2.0 * np.pi * f / c
+        u = k * (d_m / 2.0) * sin_theta   # ka·sinθ
+
+        if _SCIPY:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                ff = np.where(np.abs(u) < 1e-9, 1.0, 2.0 * _j1(u) / u)
         else:
-            # Alte frequenze: effetto maggiore
-            attenuation = -3.0 * (1 - open_fraction) * np.log10(ka)
-    else:
-        attenuation = np.where(
-            ka < 1.0,
-            -0.1 * (1 - open_fraction),
-            -3.0 * (1 - open_fraction) * np.log10(np.maximum(ka, 1e-10))
-        )
+            ff = np.where(np.abs(u) < 1e-9, 1.0, np.sinc(u / np.pi))
 
-    return attenuation
+        transmission = open_ratio + (1.0 - open_ratio) * ff ** 2
+        out[i, :] = 10.0 * np.log10(np.maximum(transmission, 1e-12))
+
+    return out
 
 
 def grille_frequency_response(

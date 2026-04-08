@@ -536,13 +536,36 @@ def goldberg_number(spl_db, frequency, path_length_m, beta=1.2,
 
 ### 5.6 Roadmap Implementazione (priorità)
 
-| Priorità | Feature | Impatto |
-|----------|---------|---------|
-| Alta | `boundary_layer_attenuation()` in horn_calculator | Correzione risposta CD |
-| Alta | `calculate_thd()` in analysis_tabs | Analisi distorsione |
-| Media | `reynolds_number_throat()` — warning porta bass-reflex | Safety check |
-| Bassa | Goldberg number — solo alta potenza (> 130 dB) | Analisi avanzata |
-| Bassa | Simulazione CFD (OpenFOAM/COMSOL) | Fuori scope per ora |
+| Priorità | Stato | Feature | File | Impatto |
+|----------|-------|---------|------|---------|
+| ✅ Fatto | done | `shared/fluid_acoustics.py` creato | shared/ | Modulo base fluidodinamica condiviso |
+| ✅ Fatto | done | `grille_directivity_pattern()` Bessel J1 | shared/grille_calculator.py | Controllo direttività con griglie |
+| Alta | TODO | Tab "Fluid Dynamics" in analysis_tabs | gui/analysis_tabs.py | Dashboard Reynolds/BL/THD per tromba corrente |
+| Alta | TODO | Warning turbolenza in design_panel | gui/design_panel.py | Alert se porta bass-reflex entra in regime turbolento |
+| Media | TODO | `HornReflexHybrid` — sistema ibrido | core/horn_calculator.py | Design sub tromba + reflex (Danley style) |
+| Media | TODO | Phase plug designer — CD optimization | core/ nuovo modulo | Ottimizza path-length equalization |
+| Bassa | TODO | Export per OpenFOAM (blockMeshDict) | exporters/ | CFD esterno per analisi avanzata |
+| Bassa | TODO | Goldberg number — solo > 130 dB | shared/fluid_acoustics.py | Già implementato, da collegare a UI |
+
+### 5.7 Nota critica sulla conversazione AI del 07/04/2026
+
+La conversazione `wed_apr_08_2026_fluidodinamica_e_progettazione_di_altoparl.json`
+(generata da Claude Sonnet 4.5) contiene **concetti validi ma implementazioni con errori**:
+
+| Elemento | Errore nella conversazione | Formula corretta |
+|----------|---------------------------|------------------|
+| Tractrix `radius(x)` | `a/cosh((L-x)/a)` — è la **CATENARIA**, non tractrix | Parametrica: `x_from_mouth = R_m·[arccosh(R_m/r) − √(1−(r/R_m)²)]` |
+| Boundary layer α | `(δ_v + δ_t)/(2r²)` — dimensionalmente ERRATA | `(1/r)·√(ωρ/2μ)·(1+(γ-1)/√Pr)` — Kirchhoff 1868 |
+| Webster equation | Scritta come `∂²p/∂x² + (ρ₀c²/A)p = 0` — manca termine (1/A)(dA/dx) | `d²p/dx² + (1/A)(dA/dx)(dp/dx) + k²p = 0` |
+| Flare rate calc | Usa `self.m = (2/L)·log(r_mouth/r_throat)` — OK solo per esponenziale puro | Corretto solo se r∝exp(mx/2); in generale m=4πfc/c |
+| THD da Burgers | Usa `factorial(n-1)` per ampiezze Neesima armonica — approsimazione discutibile | A₂/A₁ = (β·k·u₀·x)/2 — solo second harmonic, Beranek 1954 |
+
+**Concetti validi** da usare (implementati in `shared/fluid_acoustics.py`):
+- Reynolds + regime flusso (laminar/transitional/turbulent)
+- Vortex shedding frequency (Strouhal St=0.21)
+- Lighthill acoustic analogy per potenza vortici
+- Goldberg number Γ per check non-linearità
+- Fraunhofer diffraction J1 per pattern griglie → direttività fullrange
 
 ---
 
