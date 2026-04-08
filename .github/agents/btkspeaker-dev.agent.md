@@ -417,7 +417,132 @@ def calculate_phase_sum(freq, front_spl, back_spl, path_diff, c=342):
 | 1947 | Olson H.F. | *Elements of Acoustical Engineering* | Compendio tipi tromba |
 | 1954 | Beranek L.L. | *Acoustics* | Impedenza, direttività, pistone circolare |
 | 1957 | Olson H.F. | *Acoustical Engineering* (rev.) | Trombe folded, vincoli costruttivi |
+| 1868 | Kirchhoff G. | Ann.Phys. 134:177 | Perdite termoviscose strato limite |
 | 1975 | Keele D.B. Jr. | AES Conv.46 preprint 950 | Constant directivity horn design |
+| 1998 | Hamilton & Blackstock | *Nonlinear Acoustics* (ASA) | Acustica non lineare, THD, Burgers |
+
+---
+
+## 5. Fluidodinamica e Perdite Acustiche
+
+> Sezione derivata da analisi critica della letteratura.
+> **Le formule del documento "FLUIDODINAMICA_DESIGN_ACUSTICO.md" contengono errori:
+> la formula tractrix mostrata (`A(x)=A₀/√(1+x²)`) è ERRATA; la Webster equation
+> trascrive in modo incompleto; la formula perdite strato limite è dimensionalmente
+> inconsistente. Le formule seguenti sono verificate dalle fonti primarie.**
+
+### 5.1 Equazione di Webster (forma corretta)
+L'equazione dionde 1D per tuba non uniforme (Webster 1919):
+
+```
+d²p/dx² + (1/A)·(dA/dx)·(dp/dx) + k²·p = 0
+```
+
+Oppure in forma compatta:   `d/dx[A·dp/dx] + k²·A·p = 0`
+
+### 5.2 Perdite Termoviscose — Strato Limite (Kirchhoff 1868)
+Fondamentale per la gola del compression driver (piccolo raggio):
+
+```python
+def boundary_layer_attenuation(frequency, tube_radius_m, c=342.0, rho=1.225,
+                                mu=1.81e-5, gamma=1.4, Pr=0.707):
+    """
+    Perdita per strato limite termoviscoso in tubo circolare.
+    Valida per ka << 1 (regime sub-wavelength).
+
+    alpha [Np/m] = (1/r) * sqrt(omega*rho/(2*mu)) * (1 + (gamma-1)/sqrt(Pr))
+
+    Rif: Kirchhoff G. (1868) Ann.Phys. 134:177
+         Beranek L.L. (1954) "Acoustics" cap.3
+    """
+    import numpy as np
+    omega = 2 * np.pi * frequency
+    visc_term  = np.sqrt(omega * rho / (2 * mu))
+    therm_term = (gamma - 1) / np.sqrt(Pr)
+    alpha = (1.0 / tube_radius_m) * visc_term * (1.0 + therm_term)  # Np/m
+    return alpha
+
+# Esempio: gola CD da 1" (r=0.0127m) a 2kHz → ~0.08 Np/m = ~0.7 dB/m
+```
+
+### 5.3 Distorsione Armonica Totale (THD)
+```python
+def calculate_thd(harmonics_amplitudes):
+    """
+    THD = sqrt(sum(|Hn|^2, n=2..N)) / |H1|
+
+    Args:
+        harmonics_amplitudes: list [H1, H2, H3, ...] in Pa o volts
+
+    Returns:
+        THD come rapporto (moltiplicare x100 per %)
+
+    Rif: Hamilton & Blackstock "Nonlinear Acoustics" (1998) cap.2
+    """
+    import numpy as np
+    H = np.array(harmonics_amplitudes)
+    return np.sqrt(np.sum(H[1:]**2)) / H[0]
+```
+
+### 5.4 Numero di Reynolds — Check Turbolenza alla Gola
+```python
+def reynolds_number_throat(spl_db, throat_area_m2, frequency,
+                            rho=1.225, mu=1.81e-5, c=342.0):
+    """
+    Re = rho * v * D / mu
+
+    Per acustica: v_peak = p / (rho * c), p da SPL.
+    Turbolenza critica: Re > ~2300 (flusso laminare→turbolento).
+
+    Nota: a normali livelli audio (< 120 dB) Re << 2300 nella gola
+    dei subwoofer. Rilevante solo per porte bass-reflex ad alta escursione
+    o gole CD ad altissimo SPL (> 135 dB).
+
+    Rif: Beranek (1954), Reynolds O. (1883) Phil.Trans.R.Soc. 174:935
+    """
+    import numpy as np
+    p_ref = 20e-6
+    p_peak = p_ref * 10**(spl_db / 20)
+    v_peak = p_peak / (rho * c)
+    r = np.sqrt(throat_area_m2 / np.pi)
+    D = 2 * r
+    return rho * v_peak * D / mu
+```
+
+### 5.5 Equazione di Burgers — Acustica Non Lineare (riferimento)
+Rilevante ad SPL > 130 dB (compression driver ad alta potenza):
+
+```
+∂u/∂t + u·∂u/∂x = (μ/ρ)·∂²u/∂x²
+```
+
+Il numero di Goldberg `Γ = β·k·x₀·ρ·c / μ` determina quando
+la distorsione non lineare supera l'assorbimento visco-termico.
+`Γ > 1` → distorsione non lineare significativa.
+
+```python
+def goldberg_number(spl_db, frequency, path_length_m, beta=1.2,
+                    rho=1.225, c=342.0, mu=1.81e-5):
+    """beta=1.2 per aria (coefficiente di nonlinearità)
+    Rif: Hamilton & Blackstock (1998), Goldberg Z.A. (1957) Sov.Phys.Acoust.
+    """
+    import numpy as np
+    p_ref = 20e-6
+    p0 = p_ref * 10**(spl_db / 20)
+    u0 = p0 / (rho * c)
+    k = 2 * np.pi * frequency / c
+    return beta * k * u0 * path_length_m * rho * c / mu
+```
+
+### 5.6 Roadmap Implementazione (priorità)
+
+| Priorità | Feature | Impatto |
+|----------|---------|---------|
+| Alta | `boundary_layer_attenuation()` in horn_calculator | Correzione risposta CD |
+| Alta | `calculate_thd()` in analysis_tabs | Analisi distorsione |
+| Media | `reynolds_number_throat()` — warning porta bass-reflex | Safety check |
+| Bassa | Goldberg number — solo alta potenza (> 130 dB) | Analisi avanzata |
+| Bassa | Simulazione CFD (OpenFOAM/COMSOL) | Fuori scope per ora |
 
 ---
 

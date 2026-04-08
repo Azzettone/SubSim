@@ -190,7 +190,7 @@ def design_straight_horn(
 
 def design_folded_horn(
     horn_geometry: HornGeometry,
-    max_depth_m: float,
+    max_depth_m: float = None,
     panel_thickness_m: float = 0.018,
     aspect_ratio: float = 1.0,
     wood_price: float = DEFAULT_WOOD_PRICE_PER_M2
@@ -212,6 +212,8 @@ def design_folded_horn(
         CabinetGeometry con pannelli e punto di piega calcolati
     """
     t = panel_thickness_m
+    if max_depth_m is None:
+        max_depth_m = horn_geometry.horn_length_m / 2
     horn_length = horn_geometry.horn_length_m
     mouth_area = horn_geometry.mouth_area_m2
     throat_area = horn_geometry.throat_area_m2
@@ -277,8 +279,8 @@ def design_folded_horn(
 
 def design_2folded_horn(
     horn_geometry: HornGeometry,
-    max_depth_m: float,
-    max_height_m: float,
+    max_depth_m: float = None,
+    max_height_m: float = None,
     panel_thickness_m: float = 0.018,
     aspect_ratio: float = 1.0,
     wood_price: float = DEFAULT_WOOD_PRICE_PER_M2
@@ -300,6 +302,10 @@ def design_2folded_horn(
         CabinetGeometry con pannelli e 2 punti di piega calcolati
     """
     t = panel_thickness_m
+    if max_depth_m is None:
+        max_depth_m = horn_geometry.horn_length_m / 3
+    if max_height_m is None:
+        max_height_m = horn_geometry.mouth_diameter_m * 3.5
     horn_length = horn_geometry.horn_length_m
     mouth_area = horn_geometry.mouth_area_m2
     throat_area = horn_geometry.throat_area_m2

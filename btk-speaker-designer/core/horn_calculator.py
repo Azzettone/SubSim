@@ -402,7 +402,10 @@ def calculate_coupling_volume(
             area_at_position(xi, throat_area_m2, flare_rate_m, expansion_type, hypex_T)
             for xi in x
         ])
-        _trapz = getattr(np, "trapezoid", np.trapz)  # NumPy ≥2.0 / <2.0 compat
+        try:
+            _trapz = np.trapezoid   # NumPy ≥2.0
+        except AttributeError:
+            _trapz = np.trapz       # NumPy <2.0
         return _trapz(areas, x)
 
 
