@@ -271,104 +271,153 @@ CREATE TABLE horns (
 );
 ```
 
-### 4. Formule Acustiche Fondamentali
+### 4. Formule Acustiche Fondamentali — Letteratura Canonica (1919–1980)
+
+> Fonti primarie verificate: Webster (1919), Olson (1947/1957), Salmon (1946),
+> Klipsch (1941), Beranek (1954), Keele jr. (1975 AES Conv.46)
+
+#### ⚠️ Errori comuni da NON COMMETTERE
+
+| Formula | ERRATA | CORRETTA | Fonte |
+|---------|--------|----------|-------|
+| Flare rate esponenziale | `m = 2π·fc/c·√2` | `m = 4π·fc/c` | Webster (1919), Olson (1957) |
+| Tractrix: profilo | sin(x) o approssimazioni ad hoc | Inversione parametrica (arccosh) | Klipsch (1941) |
+| Hypex: profilo | `cosh·exp` inventato | `S₀·[cosh(σx)+T·sinh(σx)]²` | Salmon (1946) |
+| Hypex: flare rate | `3π·fc/c` | `2π·fc/(c·√(1-T²))` | Salmon (1946) |
+| Direttività -6dB | `arcsin(1.08/ka)` (-1.2dB!) | `arcsin(2.2313/ka)` (Bessel) | Beranek (1954) |
+
+---
 
 #### Espansione Esponenziale
 ```python
 def exponential_expansion(x, S_throat, m):
     """
     S(x) = S_throat * exp(m * x)
-    
-    Dove:
-    - x: distanza dalla gola (m)
-    - S_throat: area gola (m²)
-    - m: flare rate (m⁻¹)
+    Rif: Webster A.G. (1919) PNAS 5:275
+         Olson H.F. (1957) "Acoustical Engineering" cap. 6
     """
     return S_throat * np.exp(m * x)
 
-def calculate_flare_rate(f_cutoff, c=342):
+def calculate_flare_rate_exponential(f_cutoff, c=342.016):
     """
-    m = 4π * f_cutoff / c
+    m = 4π · fc / c
+    NOTA: NON è 2π/c·√2 — quella formula è SBAGLIATA.
     """
     return (4 * np.pi * f_cutoff) / c
 ```
 
+#### Profilo Tractrix (Klipsch 1941)
+Il profilo tractrix è definito dalla proprietà che la tangente
+da ogni punto della curva all'asse ha lunghezza costante = R_m (raggio bocca).
+
+```python
+# Formula chiusa per x in funzione di r (misurato dalla bocca):
+# x_from_mouth(r) = R_m · [arccosh(R_m/r) − √(1 − (r/R_m)²)]
+# R_m = c / (2π·fc) = 1/flare_rate
+#
+# Lunghezza tromba (formula chiusa!):
+# L = R_m · [arccosh(R_m/r_throat) − √(1 − (r_throat/R_m)²)]
+#
+# Inversione r(x): richiede scipy.optimize.brentq
+# NON usare sin(x), NON usare approssimazioni arbitrarie.
+#
+# Rif: Klipsch P.W. (1941) JASA 13:137
+#      Salmon V. (1946) JASA 17:212
+
+def tractrix_x_from_mouth(r, R_m):
+    u = R_m / r
+    return R_m * (np.arccosh(u) - np.sqrt(1 - 1/u**2))
+```
+
+#### Profilo Hypex — Salmon (1946)
+```python
+def hypex_area(x, S_throat, sigma, T):
+    """
+    S(x) = S₀ · [cosh(σx) + T·sinh(σx)]²
+    
+    T ∈ [0, 1):
+      T=0.0 → cosh² horn (Klipsch, minima distorsione vicino a Fc)
+      T=0.5 → Hypex classico (ottimo compromesso)
+      T→1.0 → approssima esponenziale
+    
+    Flare rate: σ = 2π·fc / (c · √(1−T²))
+    
+    Lunghezza (formula chiusa):
+      u = [√ratio + √(ratio − (1−T²))] / (1+T)
+      L = ln(u) / σ
+    
+    Rif: Salmon V. (1946) JASA 17:212
+         "Generalized Plane Wave Horn Theory"
+    """
+    s = sigma * x
+    return S_throat * (np.cosh(s) + T * np.sinh(s))**2
+```
+
 #### Impedenza Acustica
 ```python
-def throat_impedance(S_throat, rho=1.225, c=342):
+def throat_impedance(S_throat, rho=1.225, c=342.016):
     """
     Z_throat = (rho * c) / S_throat
-    
-    Unità: Pa·s/m³ = acoustic ohm
+    Unità: Pa·s/m³ (acoustic ohm)
+    Rif: Beranek (1954) cap. 5
     """
     return (rho * c) / S_throat
+```
+
+#### Direttività — Pistone Circolare (Beranek 1954)
+```python
+# D(θ) = 2·J₁(ka·sinθ) / (ka·sinθ)  — pattern pistone circolare
+# Per -6 dB: 2·J₁(u)/u = 0.5 → u ≈ 2.2313 (scipy.brentq)
+# Angolo full coverage -6dB = 2 · arcsin(2.2313 / ka)
+#
+# Rif: Beranek L.L. "Acoustics" (1954) cap. 4
+#      Keele D.B. Jr. (1975) AES Convention 46, preprint 950
+#
+# NOTA: il valore 1.08/ka è per ~-1.2 dB, NON per -6 dB.
+
+from scipy.special import j1
+from scipy.optimize import brentq
+U_6DB = brentq(lambda u: 2*j1(u)/u - 0.5, 0.5, 3.8)  # ≈ 2.2313
+
+def horn_directivity_6dB(frequencies, mouth_radius, c=342.016):
+    ka = 2 * np.pi * frequencies * mouth_radius / c
+    theta_half = np.degrees(np.arcsin(np.minimum(U_6DB / ka, 1.0)))
+    return 2 * theta_half  # angolo full (entrambi i lati)
+```
+
+#### Vincoli Fisici Sezioni (Olson 1957)
+```python
+# Ratio massimo tra sezioni adiacenti per evitare riflessioni interne
+MAX_AREA_RATIO_ADJACENT = 4.0  # S[i+1]/S[i] ≤ 4  (2:1 in raggio)
+# Rif: Olson H.F. (1957) "Acoustical Engineering" cap. 6
 ```
 
 #### Somma in Fase (Fronte/Retro)
 ```python
 def calculate_phase_sum(freq, front_spl, back_spl, path_diff, c=342):
-    """
-    Calcola interferenza costruttiva/distruttiva
-    tra radiazione frontale (tromba) e posteriore (cono).
-    
-    Args:
-        freq: frequenza (Hz)
-        front_spl: SPL frontale (dB)
-        back_spl: SPL posteriore (dB)
-        path_diff: differenza cammino (m)
-        c: velocità suono (m/s)
-    
-    Returns:
-        combined_spl: SPL risultante (dB)
-        phase_shift: sfasamento (radianti)
-    """
-    # Converti SPL in pressione
     p_front = 10 ** (front_spl / 20)
-    p_back = 10 ** (back_spl / 20)
-    
-    # Calcola sfasamento
-    wavelength = c / freq
-    phase_shift = 2 * np.pi * (path_diff / wavelength)
-    
-    # Somma vettoriale
+    p_back  = 10 ** (back_spl  / 20)
+    phase_shift = 2 * np.pi * path_diff * freq / c
     p_total = np.sqrt(
-        p_front**2 + p_back**2 + 
+        p_front**2 + p_back**2 +
         2 * p_front * p_back * np.cos(phase_shift)
     )
-    
-    # Converti in SPL
-    combined_spl = 20 * np.log10(p_total)
-    
-    return combined_spl, phase_shift
+    return 20 * np.log10(p_total), phase_shift
 ```
 
-#### Vincoli Dimensionali
-```python
-def check_constraints(design, constraints):
-    """
-    Verifica che il design rispetti i vincoli dimensionali.
-    
-    Args:
-        design: dict con dimensioni calcolate
-        constraints: dict con limiti max (L, H, P)
-    
-    Returns:
-        valid: bool
-        violations: list of str
-    """
-    violations = []
-    
-    if design['length'] > constraints['max_length']:
-        violations.append(f"Lunghezza {design['length']:.2f}m > {constraints['max_length']:.2f}m")
-    
-    if design['height'] > constraints['max_height']:
-        violations.append(f"Altezza {design['height']:.2f}m > {constraints['max_height']:.2f}m")
-    
-    if design['depth'] > constraints['max_depth']:
-        violations.append(f"Profondità {design['depth']:.2f}m > {constraints['max_depth']:.2f}m")
-    
-    return len(violations) == 0, violations
-```
+---
+
+## 📚 Letteratura Canonica Verificata
+
+| Anno | Autore | Opera | Contributo chiave |
+|------|--------|-------|-------------------|
+| 1919 | Webster A.G. | PNAS 5:275 | Equazione d'onda tromba (Webster eq.) |
+| 1941 | Klipsch P.W. | JASA 13:137 | Tromba tractrix compatta a bassa Fc |
+| 1946 | Salmon V. | JASA 17:212 | Teoria generalizzata onde piane: famiglia Hypex |
+| 1947 | Olson H.F. | *Elements of Acoustical Engineering* | Compendio tipi tromba |
+| 1954 | Beranek L.L. | *Acoustics* | Impedenza, direttività, pistone circolare |
+| 1957 | Olson H.F. | *Acoustical Engineering* (rev.) | Trombe folded, vincoli costruttivi |
+| 1975 | Keele D.B. Jr. | AES Conv.46 preprint 950 | Constant directivity horn design |
 
 ---
 

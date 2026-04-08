@@ -260,6 +260,7 @@ if PYQT_AVAILABLE:
                     smouth_sthroat_ratio=params["smouth_ratio"],
                     throat_compression_ratio=params["compression_ratio"],
                     expansion_type=params["expansion_type"],
+                    hypex_T=params.get("hypex_T", 0.5),
                     c=c,
                     n_sections=params.get("n_sections", 8),
                 )

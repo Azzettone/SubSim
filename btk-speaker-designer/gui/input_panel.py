@@ -32,7 +32,7 @@ except ImportError:
 
 from ..core.constants import (
     SPEAKER_TYPE_SUB, SPEAKER_TYPE_CD, SPEAKER_TYPE_FULLRANGE,
-    EXPANSION_TYPES, EXPANSION_LABELS, EXPANSION_EXPONENTIAL,
+    EXPANSION_TYPES, EXPANSION_LABELS, EXPANSION_EXPONENTIAL, EXPANSION_HYPEX,
     GEOMETRY_TYPES, GEOMETRY_LABELS, GEOMETRY_STRAIGHT,
 )
 from ..core.driver_model import DriverModel
@@ -333,9 +333,31 @@ class InputPanel(QWidget):
             "Tipo di espansione del profilo della tromba.\n"
             "Esponenziale: S(x) = S\u2080 \u00b7 e^(m\u00b7x) \u2014 il tipo pi\u00f9 usato per sub.\n"
             "Conical: espansione lineare.\n"
-            "Tractrix / Hypex: profili avanzati per compression driver."
+            "Tractrix: bocca fissa da Fc (Klipsch 1941).\n"
+            "Hypex: ibrido cosh\u00b2/esponenziale, param T selezionabile (Salmon 1946)."
         )
+        self.expansion_combo.currentIndexChanged.connect(self._on_expansion_changed)
         grid.addWidget(self.expansion_combo, row, 1)
+        row += 1
+
+        # ── Parametro Hypex T (visibile solo con Hypex) ────────────────────────
+        self._hypex_t_label = QLabel("Hypex T:")
+        self._hypex_t_spin = QDoubleSpinBox()
+        self._hypex_t_spin.setRange(0.0, 0.99)
+        self._hypex_t_spin.setValue(0.5)
+        self._hypex_t_spin.setSingleStep(0.05)
+        self._hypex_t_spin.setDecimals(2)
+        self._hypex_t_spin.setToolTip(
+            "Parametro di forma T per profilo Hypex (Salmon 1946, JASA 17:212).\n"
+            "T = 0.00 \u2192 cosh\u00b2 horn (minore distorsione vicino a Fc)\n"
+            "T = 0.50 \u2192 Hypex classico (ottimo compromesso)\n"
+            "T \u2192 1.00 \u2192 approssima profilo esponenziale\n"
+            "Range: [0, 1) \u2014 valori vicini a 1 rendono la tromba pi\u00f9 lunga."
+        )
+        grid.addWidget(self._hypex_t_label, row, 0)
+        grid.addWidget(self._hypex_t_spin, row, 1)
+        self._hypex_t_label.setVisible(False)
+        self._hypex_t_spin.setVisible(False)
         row += 1
 
         grid.addWidget(QLabel("Sm/Sg ratio:"), row, 0)
@@ -485,6 +507,12 @@ class InputPanel(QWidget):
             self.compression_spin.setValue(1.0)
         self._reload_driver_combo(speaker_type)
 
+    def _on_expansion_changed(self):
+        """Mostra/nasconde il campo Hypex T in base al tipo di espansione."""
+        is_hypex = (self.expansion_combo.currentData() == EXPANSION_HYPEX)
+        self._hypex_t_label.setVisible(is_hypex)
+        self._hypex_t_spin.setVisible(is_hypex)
+
     def _reload_driver_combo(self, speaker_type: str):
         """Ricarica il combo driver filtrato per tipo speaker."""
         type_map = {
@@ -556,6 +584,7 @@ class InputPanel(QWidget):
             "driver":             self._selected_driver,
             "fc_hz":              self.fc_spin.value(),
             "expansion_type":     self.expansion_combo.currentData(),
+            "hypex_T":            self._hypex_t_spin.value(),
             "smouth_ratio":       self.ratio_spin.value(),
             "compression_ratio":  self.compression_spin.value(),
             "n_sections":         self.n_sections_spin.value(),
@@ -579,6 +608,8 @@ class InputPanel(QWidget):
                 if self.expansion_combo.itemData(i) == params["expansion_type"]:
                     self.expansion_combo.setCurrentIndex(i)
                     break
+        if "hypex_T" in params:
+            self._hypex_t_spin.setValue(params["hypex_T"])
         if "smouth_ratio" in params:
             self.ratio_spin.setValue(params["smouth_ratio"])
         if "compression_ratio" in params:
