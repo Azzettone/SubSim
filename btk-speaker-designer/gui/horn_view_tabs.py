@@ -524,124 +524,165 @@ class _SideCanvas(_DragMixin, QWidget):
 
     # ── Folded horn rendering ──────────────────────────────────────────────────
 
+    @staticmethod
+    def _fold_geometry(g, fold_pts, sections):
+        """
+        Calcola radii ai confini dei segmenti e y_centers per la vista SIDE folded.
+
+        Returns
+        -------
+        bounds_m : list[float]   posizioni lungo l'asse in m (n_segs+1 elementi)
+        r_bounds : list[float]   raggio in cm a ogni confine
+        y_mids   : list[float]   y-centro (cm) di ogni canale (origine Y=0 = fondo cabinet)
+        """
+        L_m       = g.horn_length_m
+        bounds_m  = [0.0] + [fp.x_m for fp in fold_pts] + [L_m]
+        xs_all    = np.array([0.0] + [s.x_m for s in sections])
+        rs_all    = np.array([g.throat_radius_m] + [s.radius_m for s in sections])
+
+        def r_at(x_m):
+            if abs(x_m) < 1e-9:          return g.throat_radius_m * 100
+            if abs(x_m - L_m) < 1e-9:   return g.mouth_radius_m  * 100
+            for fp in fold_pts:
+                if abs(fp.x_m - x_m) < 1e-9:
+                    return fp.height_m * 50.0
+            return float(np.interp(x_m, xs_all, rs_all)) * 100
+
+        r_bounds = [r_at(x) for x in bounds_m]
+        n_segs   = len(bounds_m) - 1
+        # y_mid[0] = r_bounds[1] → fondo del seg0 tocca y=0 al punto di piega
+        y_mids = [r_bounds[1] if n_segs >= 2 else r_bounds[0]]
+        for i in range(n_segs - 1):
+            y_mids.append(y_mids[-1] + 2.0 * r_bounds[i + 1])
+        return bounds_m, r_bounds, y_mids
+
     def _draw_folded_side(self, ax, g, sections, is_custom):
         """
         Rendering SIDE per tromba folded/2-folded.
-        Disegna ogni segmento come striscia orizzontale impilata verticalmente;
-        le pieghe sono collegate da frecce direzionali.
+        X = profondità fisica [0, D_cm], Y = altezza impilata.
+        I canali si toccano ai punti di piega (zero gap).
         """
-        cab       = self._cabinet_geometry
-        fold_pts  = sorted(cab.fold_points, key=lambda fp: fp.x_m)
-        L_m       = g.horn_length_m
-        bounds_m  = [0.0] + [fp.x_m for fp in fold_pts] + [L_m]
-        n_segs    = len(bounds_m) - 1
-        GAP_CM    = 2.5
-        dot_col   = C_DRAG if is_custom else C_PROFILE
-        SEG_COLS  = [C_PROFILE, C_FOLD, C_MOUTH, C_THROAT]
+        cab      = self._cabinet_geometry
+        fold_pts = sorted(cab.fold_points, key=lambda fp: fp.x_m)
+        L_m      = g.horn_length_m
+        D_cm     = cab.total_depth_mm  / 10
+        H_cm     = cab.total_height_mm / 10
+        W_cm     = cab.total_width_mm  / 10
+        dot_col  = C_DRAG if is_custom else C_PROFILE
+        SEG_COLS = [C_PROFILE, C_FOLD, "#80D080", "#E080C0"]
 
-        # ── per ogni segmento calcola (xs, rs) nel sistema locale ──────────
-        strips = []
+        bounds_m, r_bounds, y_mids = self._fold_geometry(g, fold_pts, sections)
+        n_segs = len(bounds_m) - 1
+
+        # ── Disegna ogni canale ──────────────────────────────────────────────
         for i in range(n_segs):
-            x0_m, x1_m = bounds_m[i], bounds_m[i + 1]
-            seg_sects   = [s for s in sections if x0_m - 1e-9 <= s.x_m <= x1_m + 1e-9]
-            seg_len_cm  = (x1_m - x0_m) * 100
+            x0_m    = bounds_m[i]
+            x1_m    = bounds_m[i + 1]
+            seg_len = max(x1_m - x0_m, 1e-9)
+            col     = SEG_COLS[i % len(SEG_COLS)]
+            ym      = y_mids[i]
 
-            r_start = g.throat_radius_m * 100 if i == 0 else fold_pts[i - 1].height_m * 50.0
-            pts_x = np.array([0.0] + [(s.x_m - x0_m) * 100 for s in seg_sects])
-            pts_r = np.array([r_start] + [s.radius_m * 100 for s in seg_sects])
+            pts = [(0.0, r_bounds[i])]
+            for s in sections:
+                if x0_m < s.x_m < x1_m:
+                    pts.append(((s.x_m - x0_m) / seg_len, s.radius_m * 100))
+            pts.append((1.0, r_bounds[i + 1]))
+            pts.sort()
+            fracs = np.array([p[0] for p in pts])
+            rs    = np.array([p[1] for p in pts])
 
-            if i % 2 == 1:          # segmenti dispari vanno a sinistra
-                pts_x = seg_len_cm - pts_x[::-1]
-                pts_r = pts_r[::-1]
+            # Mappa frac → x fisico [0, D_cm]
+            x_phys = fracs * D_cm if i % 2 == 0 else D_cm * (1.0 - fracs)
 
-            strips.append({
-                'xs':          pts_x,
-                'rs':          pts_r,
-                'seg_len_cm':  seg_len_cm,
-                'going_right': (i % 2 == 0),
-            })
+            ax.fill_between(x_phys, ym - rs, ym + rs, alpha=0.18, color=col, zorder=2)
+            ax.plot(x_phys, ym + rs, color=col, lw=2.0, zorder=3)
+            ax.plot(x_phys, ym - rs, color=col, lw=2.0, zorder=3)
+            ax.axhline(ym, color=C_AXIS, lw=0.4, ls=':', alpha=0.35)
 
-        # ── Y center per ogni strip (impilate dall'alto) ──────────────────
-        y_tops, y_cur = [], 0.0
-        for s in strips:
-            r_max  = float(s['rs'].max()) if len(s['rs']) else 5.0
-            y_tops.append(y_cur - r_max)
-            y_cur  = y_tops[-1] - r_max - GAP_CM
-        y_offset = (y_tops[0] + y_tops[-1]) / 2
-        y_centers = [y - y_offset for y in y_tops]
+            # Freccia direzione al centro del canale
+            cx = D_cm * (0.55 if i % 2 == 0 else 0.45)
+            dx = D_cm * (0.07 if i % 2 == 0 else -0.07)
+            ax.annotate('', xy=(cx + dx, ym), xytext=(cx, ym),
+                        arrowprops=dict(arrowstyle='->', color=col, lw=1.3,
+                                        mutation_scale=13), zorder=4)
 
-        x_max_cm = max((s['seg_len_cm'] for s in strips), default=1.0)
+            # Dot sezioni
+            if len(fracs) > 2:
+                ix, ir = x_phys[1:-1], rs[1:-1]
+                ax.scatter(ix, ym + ir, c=dot_col, s=20, zorder=5,
+                           edgecolors='#FFFFFF', lw=0.4)
+                ax.scatter(ix, ym - ir, c=dot_col, s=20, zorder=5,
+                           edgecolors='#FFFFFF', lw=0.4)
 
-        # ── disegna ogni segmento ─────────────────────────────────────────
-        for i, (strip, y_c) in enumerate(zip(strips, y_centers)):
-            col = SEG_COLS[i % len(SEG_COLS)]
-            xs, rs = strip['xs'], strip['rs']
-
-            ax.fill_between(xs, y_c + rs, y_c - rs, alpha=0.13, color=col)
-            lt, = ax.plot(xs, y_c + rs, color=col, lw=2.0)
-            lb, = ax.plot(xs, y_c - rs, color=col, lw=2.0)
-            lt._btk_profile = lb._btk_profile = True
-
-            if len(xs) > 1:
-                st = ax.scatter(xs[1:], y_c + rs[1:], c=dot_col, s=28, zorder=5,
-                                edgecolors='#FFF', lw=0.45)
-                sb = ax.scatter(xs[1:], y_c - rs[1:], c=dot_col, s=28, zorder=5,
-                                edgecolors='#FFF', lw=0.45)
-                st._btk_scatter = sb._btk_scatter = True
-
-            ax.axhline(y_c, color=C_AXIS, lw=0.45, ls='--', alpha=0.3)
-
-            if i == 0:
-                lbl = "◀ Gola"
-            elif i == n_segs - 1:
-                lbl = "Bocca ▶"
-            else:
-                lbl = f"Seg. {i + 1}"
-            ax.text(float(np.mean(xs)), y_c + float(rs.max()) + 0.7,
-                    lbl, ha='center', va='bottom', color=col, fontsize=7.5)
-
-        # ── frecce di connessione alle pieghe ─────────────────────────────
+        # ── Connessioni alle pieghe ──────────────────────────────────────────
         for i, fp in enumerate(fold_pts):
-            s_i   = strips[i]
-            x_loc = (fp.x_m - bounds_m[i]) * 100
-            if not s_i['going_right']:
-                x_loc = s_i['seg_len_cm'] - x_loc
-            y1, y2 = y_centers[i], y_centers[i + 1]
-            ax.annotate("", xytext=(x_loc, y1), xy=(x_loc, y2),
-                        arrowprops=dict(arrowstyle="-|>", color=C_FOLD,
-                                        lw=1.3, mutation_scale=10))
-            ax.text(x_loc + 0.4, (y1 + y2) / 2,
-                    f"  piega {i + 1}\n  @{fp.x_m * 100:.0f}cm",
-                    color=C_FOLD, fontsize=7, va='center')
+            r_f  = r_bounds[i + 1]
+            ym0  = y_mids[i]
+            ym1  = y_mids[i + 1]
+            x_fold  = D_cm if i % 2 == 0 else 0.0
+            arc_ext = min(r_f * 0.35, D_cm * 0.10)
+            arc_cy  = ym0 + r_f   # = ym1 - r_f (touching boundary)
 
-        # ── annotazioni gola / bocca ──────────────────────────────────────
-        r_t_cm = g.throat_radius_m * 100
-        r_m_cm = g.mouth_radius_m  * 100
-        ax.annotate(f"Gola Ø{g.throat_diameter_m * 100:.1f}cm",
-                    xy=(0, y_centers[0] + r_t_cm),
-                    xytext=(x_max_cm * 0.3, y_centers[0] + r_t_cm + 2.5),
+            # Arco esterno U-turn (ellisse semi-aperta verso il bordo)
+            if i % 2 == 0:
+                theta  = np.linspace(-np.pi / 2, np.pi / 2, 50)
+                sign_x = 1.0
+            else:
+                theta  = np.linspace(np.pi / 2, 3 * np.pi / 2, 50)
+                sign_x = -1.0
+            arc_x = x_fold + sign_x * arc_ext * np.abs(np.cos(theta))
+            arc_y = arc_cy + 2.0 * r_f * np.sin(theta)
+
+            fill_x = np.concatenate([[x_fold], arc_x, [x_fold]])
+            fill_y = np.concatenate([[ym0 - r_f], arc_y, [ym1 + r_f]])
+            ax.fill(fill_x, fill_y, color=C_FOLD, alpha=0.22, zorder=2)
+            ax.plot(arc_x, arc_y, color=C_FOLD, lw=1.8, zorder=3)
+            # Parete divisoria interna (fold panel)
+            ax.plot([x_fold, x_fold], [ym0 + r_f * 0.98, ym1 - r_f * 0.98],
+                    color=C_FOLD, lw=1.5, ls='--', alpha=0.75, zorder=4)
+
+            # Etichetta piega
+            lx = x_fold + sign_x * (arc_ext + 0.8)
+            ax.text(lx, arc_cy,
+                    f"Piega {i + 1}\n@{fp.x_m * 100:.0f}cm",
+                    color=C_FOLD, fontsize=6.5,
+                    ha='left' if sign_x > 0 else 'right', va='center')
+
+        # ── Gola e Bocca ──────────────────────────────────────────────────────
+        ax.annotate(f"Gola\nØ{g.throat_diameter_m * 100:.1f}cm",
+                    xy=(0, y_mids[0]),
+                    xytext=(D_cm * 0.22, y_mids[0] - r_bounds[0] - 3.5),
                     color=C_THROAT, fontsize=7.5,
-                    arrowprops=dict(arrowstyle='->', color=C_THROAT, lw=0.7))
-        xs_last = strips[-1]['xs']
-        x_mouth = float(xs_last[-1]) if len(xs_last) else strips[-1]['seg_len_cm']
-        ax.annotate(f"Bocca Ø{g.mouth_diameter_m * 100:.1f}cm",
-                    xy=(x_mouth, y_centers[-1] + r_m_cm),
-                    xytext=(x_max_cm * 0.55, y_centers[-1] + r_m_cm + 2.5),
+                    arrowprops=dict(arrowstyle='->', color=C_THROAT, lw=0.8))
+        x_mouth = 0.0 if n_segs % 2 == 1 else D_cm
+        ax.annotate(f"Bocca\nØ{g.mouth_diameter_m * 100:.1f}cm",
+                    xy=(x_mouth, y_mids[-1]),
+                    xytext=(D_cm * 0.60, y_mids[-1] + r_bounds[-1] + 3.5),
                     color=C_MOUTH, fontsize=7.5,
-                    arrowprops=dict(arrowstyle='->', color=C_MOUTH, lw=0.7))
+                    arrowprops=dict(arrowstyle='->', color=C_MOUTH, lw=0.8))
 
-        # ── info box ─────────────────────────────────────────────────────
+        # ── Rettangolo cabinet ────────────────────────────────────────────────
+        ax.add_patch(mpatches.Rectangle(
+            (0, 0), D_cm, H_cm,
+            lw=1.5, edgecolor=C_CABINET, facecolor='none', ls='-', alpha=0.65, zorder=5))
+
+        # ── Info box ───────────────────────────────────────────────────────────
         n_folds  = len(fold_pts)
-        fold_lbl = f"Folded {n_folds}×" if n_folds > 1 else "Folded"
-        ax.text(0.02, 0.97,
+        fold_lbl = f"{n_folds}-Folded" if n_folds > 1 else "Folded"
+        ax.text(0.02, 0.98,
                 f"{fold_lbl}  L={g.horn_length_m * 100:.1f}cm\n"
                 f"Fc={g.cutoff_frequency_hz:.0f}Hz  {g.expansion_type}\n"
-                f"Cabinet: {cab.total_depth_mm:.0f}×{cab.total_height_mm:.0f}mm (D×H)",
+                f"Cabinet: {D_cm:.0f}×{H_cm:.0f}×{W_cm:.0f}cm (D×H×W)",
                 transform=ax.transAxes, va='top', color=C_TEXT, fontsize=8,
                 bbox=dict(boxstyle='round,pad=0.3', fc=C_BG, alpha=0.7, ec=C_GRID))
 
-        ax.set_xlabel("Profondità segmento (cm)", color=C_SUBTLE, fontsize=8)
-        ax.set_ylabel("Layout verticale (cm)",    color=C_SUBTLE, fontsize=8)
+        # ── Limiti assi ────────────────────────────────────────────────────────
+        max_arc = D_cm * 0.15
+        y_top   = max(y_mids[-1] + r_bounds[-1] * 1.1, H_cm)
+        ax.set_xlim(-max_arc * 1.5, D_cm + max_arc * 1.5)
+        ax.set_ylim(-y_top * 0.08, y_top * 1.15)
+        ax.set_xlabel("Profondità (cm)", color=C_SUBTLE, fontsize=8)
+        ax.set_ylabel("Altezza (cm)",    color=C_SUBTLE, fontsize=8)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -712,6 +753,13 @@ class _TopCanvas(_DragMixin, QWidget):
         ax = self.fig.add_subplot(111)
         self._setup_ax(ax, "TOP — Vista dall'alto" + (" ✎" if is_cust else ""))
 
+        # Branch folded: proietta tutti i pass nella stessa fascia (profondità × larghezza)
+        if self._cabinet_geometry and self._cabinet_geometry.fold_points:
+            self._draw_folded_top(ax, g, sects)
+            self.fig.tight_layout(pad=1.2)
+            self.canvas.draw()
+            return
+
         x_vals = np.array([s.x_m*100      for s in sects])
         r_vals = np.array([s.radius_m*100 for s in sects])
         x_full = np.concatenate([[0.], x_vals])
@@ -759,6 +807,68 @@ class _TopCanvas(_DragMixin, QWidget):
         ax.set_ylabel("Larghezza (cm)",  color=C_SUBTLE, fontsize=8)
         self.fig.tight_layout(pad=1.2)
         self.canvas.draw()
+
+    def _draw_folded_top(self, ax, g, sections):
+        """
+        Vista TOP per tromba folded/2-folded: proiezione dall'alto (X=profondità, Y=larghezza).
+        Ogni pass è sovrapposto con colori diversi; frecce indicano la direzione del flusso.
+        """
+        cab      = self._cabinet_geometry
+        fold_pts = sorted(cab.fold_points, key=lambda fp: fp.x_m)
+        D_cm     = cab.total_depth_mm / 10
+        W_cm     = cab.total_width_mm / 10
+        SEG_COLS = [C_PROFILE, C_FOLD, "#80D080", "#E080C0"]
+
+        bounds_m, r_bounds, _ = _SideCanvas._fold_geometry(g, fold_pts, sections)
+        n_segs = len(bounds_m) - 1
+
+        # Aspect ratio: larghezza = r * sqrt(asp)
+        cab_asp = (cab.total_width_mm / cab.total_height_mm
+                   if cab.total_height_mm > 0 else 1.0)
+        sqrt_asp = float(np.sqrt(max(cab_asp, 0.1)))
+
+        for i in range(n_segs):
+            x0_m    = bounds_m[i];  x1_m = bounds_m[i + 1]
+            seg_len = max(x1_m - x0_m, 1e-9)
+            col     = SEG_COLS[i % len(SEG_COLS)]
+
+            pts = [(0.0, r_bounds[i])]
+            for s in sections:
+                if x0_m < s.x_m < x1_m:
+                    pts.append(((s.x_m - x0_m) / seg_len, s.radius_m * 100))
+            pts.append((1.0, r_bounds[i + 1]))
+            pts.sort()
+            fracs = np.array([p[0] for p in pts])
+            ws    = np.array([p[1] for p in pts]) * sqrt_asp  # half-width in cm
+
+            x_phys = fracs * D_cm if i % 2 == 0 else D_cm * (1.0 - fracs)
+
+            ax.fill_between(x_phys, ws, -ws, alpha=0.12, color=col, zorder=2)
+            ax.plot(x_phys,  ws, color=col, lw=1.5, alpha=0.8, zorder=3)
+            ax.plot(x_phys, -ws, color=col, lw=1.5, alpha=0.8, zorder=3)
+
+            cx = D_cm * 0.5
+            dx = D_cm * 0.07 * (1 if i % 2 == 0 else -1)
+            ax.annotate('', xy=(cx + dx, 0), xytext=(cx, 0),
+                        arrowprops=dict(arrowstyle='->', color=col, lw=1.2, mutation_scale=12),
+                        zorder=4)
+            lbl  = "→ Gola" if i == 0 else ("← Bocca" if i == n_segs - 1 else f"→ Seg.{i+1}")
+            lbl  = lbl.replace("→", "→" if i % 2 == 0 else "←")
+            ax.text(cx, float(ws[len(ws)//2]) + 1.0, lbl,
+                    ha='center', va='bottom', color=col, fontsize=7)
+
+        # Cabinet bounding box
+        ax.add_patch(mpatches.Rectangle((0, -W_cm/2), D_cm, W_cm,
+                                         lw=1.2, edgecolor=C_CABINET,
+                                         facecolor="none", ls="--", alpha=0.6))
+        ax.axhline(0, color=C_AXIS, lw=0.5, ls='--', alpha=0.4)
+        ax.set_xlim(-D_cm * 0.05, D_cm * 1.08)
+        ax.set_ylim(-W_cm / 2 * 1.25, W_cm / 2 * 1.25)
+        n_folds = len(fold_pts)
+        ax.set_title(f"TOP — {n_folds}-Folded  (sovrapposizione pass)",
+                     color=C_TEXT, fontsize=10, pad=6)
+        ax.set_xlabel("Profondità (cm)", color=C_SUBTLE, fontsize=8)
+        ax.set_ylabel("Larghezza (cm)",  color=C_SUBTLE, fontsize=8)
 
     def _redraw_drag(self):
         if not self.fig.axes:
@@ -840,6 +950,16 @@ class _FrontCanvas(QWidget):
             return
         g = self._horn_geometry
 
+        # Branch folded: mostra aperture gola e bocca alle loro altezze fisiche
+        if self._cabinet_geometry and self._cabinet_geometry.fold_points:
+            self.fig.clear()
+            ax = self.fig.add_subplot(111)
+            self._setup_ax(ax, "FRONT — Vista frontale (folded)")
+            self._draw_folded_front(ax, g, self._cabinet_geometry)
+            self.fig.tight_layout(pad=1.2)
+            self.canvas.draw()
+            return
+
         self.fig.clear()
         ax = self.fig.add_subplot(111)
         self._setup_ax(ax, "FRONT — Vista frontale (bocca)")
@@ -901,6 +1021,83 @@ class _FrontCanvas(QWidget):
         ax.set_ylabel("Altezza (cm)",   color=C_SUBTLE, fontsize=8)
         self.fig.tight_layout(pad=1.2)
         self.canvas.draw()
+
+    def _draw_folded_front(self, ax, g, cab):
+        """
+        FRONT view per tromba folded: asse Y = altezza fisica.
+        Mostra il pannello frontale del cabinet con gola (in basso) e bocca (in alto)
+        alle rispettive altezze fisiche. La larghezza delle aperture scala con il raggio.
+        """
+        fold_pts = sorted(cab.fold_points, key=lambda fp: fp.x_m)
+        sections = list(g.sections)
+        W_cm = cab.total_width_mm / 10
+        H_cm = cab.total_height_mm / 10
+
+        bounds_m, r_bounds, y_mids = _SideCanvas._fold_geometry(g, fold_pts, sections)
+        n_segs = len(bounds_m) - 1
+
+        # Aspect ratio larghezza/altezza
+        asp = (cab.total_width_mm / cab.total_height_mm
+               if cab.total_height_mm > 0 else 1.0)
+        sqrt_asp = float(np.sqrt(max(asp, 0.1)))
+
+        # Cabinet box (coordinate Y = altezza, X = larghezza centrata in 0)
+        ax.add_patch(mpatches.Rectangle(
+            (-W_cm / 2, 0), W_cm, H_cm,
+            lw=1.5, edgecolor=C_CABINET, facecolor=C_CABINET, alpha=0.10))
+        ax.add_patch(mpatches.Rectangle(
+            (-W_cm / 2, 0), W_cm, H_cm,
+            lw=1.5, edgecolor=C_CABINET, facecolor="none", ls="--"))
+
+        # Gola: apertura al livello di seg0 (x_phys=0), altezza y_mids[0]
+        r_t_cm = r_bounds[0]
+        w_t    = r_t_cm * sqrt_asp  # half-width dell'apertura gola
+        h_t    = r_t_cm / sqrt_asp  # half-height dell'apertura gola
+        ax.add_patch(mpatches.Rectangle(
+            (-w_t, y_mids[0] - h_t), 2 * w_t, 2 * h_t,
+            lw=2.0, edgecolor=C_THROAT, facecolor=C_THROAT, alpha=0.25))
+        ax.add_patch(mpatches.Rectangle(
+            (-w_t, y_mids[0] - h_t), 2 * w_t, 2 * h_t,
+            lw=2.0, edgecolor=C_THROAT, facecolor="none"))
+        ax.text(w_t + 0.5, y_mids[0],
+                f"Gola\nØ{g.throat_diameter_m * 100:.1f}cm",
+                color=C_THROAT, fontsize=7.5, va='center')
+
+        # Bocca: al livello del LAST segment (se n_segs dispari → x_phys=0, else x_phys=D)
+        # x_phys=0 significa che l'apertura è sul pannello FRONTALE
+        r_m_cm = r_bounds[-1]
+        w_m    = r_m_cm * sqrt_asp
+        h_m    = r_m_cm / sqrt_asp
+        y_mouth = y_mids[-1]  # centro y della bocca
+        ax.add_patch(mpatches.Rectangle(
+            (-w_m, y_mouth - h_m), 2 * w_m, 2 * h_m,
+            lw=2.0, edgecolor=C_MOUTH, facecolor=C_MOUTH, alpha=0.20))
+        ax.add_patch(mpatches.Rectangle(
+            (-w_m, y_mouth - h_m), 2 * w_m, 2 * h_m,
+            lw=2.0, edgecolor=C_MOUTH, facecolor="none"))
+        ax.text(w_m + 0.5, y_mouth,
+                f"Bocca\nØ{g.mouth_diameter_m * 100:.1f}cm",
+                color=C_MOUTH, fontsize=7.5, va='center')
+
+        # Fold panels interni: linee orizzontali alle y di transizione
+        for i in range(n_segs - 1):
+            y_panel = y_mids[i] + r_bounds[i + 1]  # touching boundary
+            ax.axhline(y_panel, xmin=0.05, xmax=0.95,
+                       color=C_FOLD, lw=1.3, ls='--', alpha=0.7)
+            ax.text(W_cm / 2 * 0.9, y_panel + 0.3,
+                    f"Pannello piega {i + 1}", color=C_FOLD, fontsize=6.5, ha='right')
+
+        # Crosshair e assi
+        ax.axhline(H_cm / 2, color=C_AXIS, lw=0.5, ls=':', alpha=0.4)
+        ax.axvline(0,         color=C_AXIS, lw=0.5, ls=':', alpha=0.4)
+        n_folds = len(fold_pts)
+        ax.set_title(f"FRONT — {n_folds}-Folded  (pannello frontale)",
+                     color=C_TEXT, fontsize=10, pad=6)
+        margin = W_cm * 0.35
+        ax.set_xlim(-W_cm / 2 - margin, W_cm / 2 + margin)
+        ax.set_ylim(-H_cm * 0.05, H_cm * 1.08)
+        ax.set_xlabel("Larghezza (cm)", color=C_SUBTLE, fontsize=8)
+        ax.set_ylabel("Altezza (cm)",   color=C_SUBTLE, fontsize=8)
 
     # ── Reflex ────────────────────────────────────────────────────────────────
 
