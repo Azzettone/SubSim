@@ -502,8 +502,8 @@ class _SideCanvas(_DragMixin, QWidget):
         if result.warnings:
             warn = "\n".join(f"⚠ {w[:65]}" for w in result.warnings[:2])
             ax.text(0.02, 0.03, warn, transform=ax.transAxes,
-                    va='bottom', color=C_ORANGE, fontsize=7.5,
-                    bbox=dict(boxstyle='round,pad=0.2', fc=C_BG, alpha=0.7, ec=C_ORANGE))
+                    va='bottom', color=C_THROAT, fontsize=7.5,
+                    bbox=dict(boxstyle='round,pad=0.2', fc=C_BG, alpha=0.7, ec=C_THROAT))
 
         ax.set_xlabel("Profondità (cm)", color=C_SUBTLE, fontsize=8)
         ax.set_ylabel("Altezza (cm)",    color=C_SUBTLE, fontsize=8)
@@ -525,7 +525,7 @@ class _SideCanvas(_DragMixin, QWidget):
         n_segs    = len(bounds_m) - 1
         GAP_CM    = 2.5
         dot_col   = C_DRAG if is_custom else C_PROFILE
-        SEG_COLS  = [C_PROFILE, C_FOLD, C_GREEN, C_ORANGE]
+        SEG_COLS  = [C_PROFILE, C_FOLD, C_MOUTH, C_THROAT]
 
         # ── per ogni segmento calcola (xs, rs) nel sistema locale ──────────
         strips = []
