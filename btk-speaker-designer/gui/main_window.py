@@ -442,27 +442,27 @@ if PYQT_AVAILABLE:
             try:
                 if enc in (ENCLOSURE_REFLEX, ENCLOSURE_HORN_REFLEX, ENCLOSURE_BANDPASS_REFLEX):
                     result = design_bass_reflex(
-                        fs=driver.fs, qts=driver.qts, vas=driver.vas,
-                        sd=driver.sd, xmax=driver.xmax,
-                        fb_hz=fb, box_volume_l=vb, c=c,
+                        fs_hz=driver.fs, qts=driver.qts, vas_l=driver.vas,
+                        sd_m2=driver.sd, xmax_m=driver.xmax_m,
+                        target_fb_hz=fb, c=c,
                     )
                 elif enc == ENCLOSURE_BANDPASS_4:
                     result = design_bandpass_4th(
-                        fs=driver.fs, qts=driver.qts, vas=driver.vas,
-                        sd=driver.sd, xmax=driver.xmax,
-                        f_low=f_low, f_high=f_high, c=c,
+                        fs_hz=driver.fs, qts=driver.qts, vas_l=driver.vas,
+                        sd_m2=driver.sd, xmax_m=driver.xmax_m,
+                        f_low_hz=f_low, f_high_hz=f_high, c=c,
                     )
                 elif enc in (ENCLOSURE_BANDPASS_6, ENCLOSURE_BANDPASS_HORN):
                     result = design_bandpass_6th(
-                        fs=driver.fs, qts=driver.qts, vas=driver.vas,
-                        sd=driver.sd, xmax=driver.xmax,
-                        f_low=f_low, f_high=f_high, c=c,
+                        fs_hz=driver.fs, qts=driver.qts, vas_l=driver.vas,
+                        sd_m2=driver.sd, xmax_m=driver.xmax_m,
+                        f_low_hz=f_low, f_high_hz=f_high, c=c,
                     )
                 else:
                     result = design_bass_reflex(
-                        fs=driver.fs, qts=driver.qts, vas=driver.vas,
-                        sd=driver.sd, xmax=driver.xmax,
-                        fb_hz=fb, box_volume_l=vb, c=c,
+                        fs_hz=driver.fs, qts=driver.qts, vas_l=driver.vas,
+                        sd_m2=driver.sd, xmax_m=driver.xmax_m,
+                        target_fb_hz=fb, c=c,
                     )
             except Exception as e:
                 _err = str(e)
@@ -475,12 +475,14 @@ if PYQT_AVAILABLE:
             self.status_bar.showMessage(
                 f"Driver: {driver.manufacturer} {driver.model}  |  "
                 f"Enclosure: {enc}  |  "
-                f"Fb = {result.fb_hz:.1f} Hz  |  "
-                f"Vb = {result.box_volume_l:.1f} L  |  "
+                f"Fb = {result.tuning_freq_hz:.1f} Hz  |  "
+                f"Vb = {result.box_volume_front_l:.1f} L  |  "
                 f"F3 [{result.f3_low_hz:.0f}–{result.f3_high_hz:.0f}] Hz"
             )
             # Aggiorna i tab di analisi con la risposta reflex/bandpass
             self.analysis_tabs.update_reflex(result, driver)
+            # Aggiorna la visualizzazione 2D/3D con il render del cabinet
+            self.horn_view.update_reflex(result, driver)
 
         def _on_sections_modified(self, custom_sections: list):
             """

@@ -490,37 +490,63 @@ class InputPanel(QWidget):
 
         vbox.addWidget(self._hsep())
 
-        # ══ [6] LIMITI DIMENSIONALI ═══════════════════════════════════════
-        dim_layout = QGridLayout()
-        dim_layout.setVerticalSpacing(4)
-        dim_layout.setHorizontalSpacing(8)
-        dim_layout.setColumnStretch(1, 1)
+        # ══ [6] DIMENSIONI ESTERNE CABINET ════════════════════════════════
+        ext_dim_layout = QGridLayout()
+        ext_dim_layout.setVerticalSpacing(4)
+        ext_dim_layout.setHorizontalSpacing(8)
+        ext_dim_layout.setColumnStretch(1, 1)
 
         r = 0
-        dim_layout.addWidget(QLabel("Larghezza max:"), r, 0)
-        self.max_width_spin = QDoubleSpinBox()
-        self.max_width_spin.setRange(0, 5000)
-        self.max_width_spin.setValue(0)
-        self.max_width_spin.setSuffix(" mm")
-        self.max_width_spin.setToolTip("0 = nessun limite")
-        dim_layout.addWidget(self.max_width_spin, r, 1); r += 1
+        ext_dim_layout.addWidget(QLabel("Larghezza ext:"), r, 0)
+        self.ext_width_spin = QDoubleSpinBox()
+        self.ext_width_spin.setRange(0, 5000)
+        self.ext_width_spin.setValue(0)
+        self.ext_width_spin.setSuffix(" mm")
+        self.ext_width_spin.setDecimals(0)
+        self.ext_width_spin.setToolTip("Larghezza esterna totale cabinet (0 = non vincolato)")
+        ext_dim_layout.addWidget(self.ext_width_spin, r, 1); r += 1
 
-        dim_layout.addWidget(QLabel("Altezza max:"), r, 0)
-        self.max_height_spin = QDoubleSpinBox()
-        self.max_height_spin.setRange(0, 5000)
-        self.max_height_spin.setValue(0)
-        self.max_height_spin.setSuffix(" mm")
-        dim_layout.addWidget(self.max_height_spin, r, 1); r += 1
+        ext_dim_layout.addWidget(QLabel("Altezza ext:"), r, 0)
+        self.ext_height_spin = QDoubleSpinBox()
+        self.ext_height_spin.setRange(0, 5000)
+        self.ext_height_spin.setValue(0)
+        self.ext_height_spin.setSuffix(" mm")
+        self.ext_height_spin.setDecimals(0)
+        self.ext_height_spin.setToolTip("Altezza esterna totale cabinet (0 = non vincolato)")
+        ext_dim_layout.addWidget(self.ext_height_spin, r, 1); r += 1
 
-        dim_layout.addWidget(QLabel("Profondità max:"), r, 0)
-        self.max_length_spin = QDoubleSpinBox()
-        self.max_length_spin.setRange(0, 5000)
-        self.max_length_spin.setValue(0)
-        self.max_length_spin.setSuffix(" mm")
-        dim_layout.addWidget(self.max_length_spin, r, 1); r += 1
+        ext_dim_layout.addWidget(QLabel("Profondità ext:"), r, 0)
+        self.ext_depth_spin = QDoubleSpinBox()
+        self.ext_depth_spin.setRange(0, 5000)
+        self.ext_depth_spin.setValue(0)
+        self.ext_depth_spin.setSuffix(" mm")
+        self.ext_depth_spin.setDecimals(0)
+        self.ext_depth_spin.setToolTip("Profondità esterna totale cabinet (0 = non vincolato)")
+        ext_dim_layout.addWidget(self.ext_depth_spin, r, 1); r += 1
 
-        self.gb_limits = self._group("LIMITI DIMENSIONALI", dim_layout)
-        vbox.addWidget(self.gb_limits)
+        ext_dim_layout.addWidget(QLabel("Spessore legno:"), r, 0)
+        self.wood_thickness_spin = QDoubleSpinBox()
+        self.wood_thickness_spin.setRange(6, 50)
+        self.wood_thickness_spin.setValue(18)
+        self.wood_thickness_spin.setSuffix(" mm")
+        self.wood_thickness_spin.setDecimals(0)
+        self.wood_thickness_spin.setToolTip(
+            "Spessore pannelli MDF (tipico: MDF 18mm, Birch ply 15mm, truciolato 19mm)"
+        )
+        ext_dim_layout.addWidget(self.wood_thickness_spin, r, 1); r += 1
+
+        self._vol_estimate_label = QLabel("Volume interno: —")
+        self._vol_estimate_label.setStyleSheet(
+            "color: #A0E0A0; font-size: 11px; font-weight: bold; padding: 2px;"
+        )
+        ext_dim_layout.addWidget(self._vol_estimate_label, r, 0, 1, 2)
+
+        self.gb_cabinet_dims = self._group("DIMENSIONI ESTERNE CABINET", ext_dim_layout)
+        vbox.addWidget(self.gb_cabinet_dims)
+
+        for _sp in (self.ext_width_spin, self.ext_height_spin,
+                    self.ext_depth_spin, self.wood_thickness_spin):
+            _sp.valueChanged.connect(self._update_vol_estimate)
 
         vbox.addWidget(self._hsep())
 
@@ -831,6 +857,34 @@ class InputPanel(QWidget):
         self._slot_h_label.setVisible(is_slot)
         self.slot_h_spin.setVisible(is_slot)
 
+    def _update_vol_estimate(self):
+        """Aggiorna il label con il volume interno stimato dalle dimensioni esterne."""
+        w = self.ext_width_spin.value()
+        h = self.ext_height_spin.value()
+        d = self.ext_depth_spin.value()
+        t = self.wood_thickness_spin.value()
+        all_set = w > 0 and h > 0 and d > 0
+        if not all_set:
+            self._vol_estimate_label.setText("Volume interno: —")
+            self._vol_estimate_label.setStyleSheet(
+                "color: #A0E0A0; font-size: 11px; font-weight: bold; padding: 2px;"
+            )
+            return
+        if w <= 2 * t or h <= 2 * t or d <= 2 * t:
+            self._vol_estimate_label.setText("⚠ Dimensioni troppo piccole per lo spessore legno")
+            self._vol_estimate_label.setStyleSheet(
+                "color: #E0A040; font-size: 11px; font-weight: bold; padding: 2px;"
+            )
+            return
+        wi = (w - 2 * t) / 1000.0
+        hi = (h - 2 * t) / 1000.0
+        di = (d - 2 * t) / 1000.0
+        vol_l = wi * hi * di * 1000.0
+        self._vol_estimate_label.setText(f"Volume interno: ~{vol_l:.1f} L")
+        self._vol_estimate_label.setStyleSheet(
+            "color: #A0E0A0; font-size: 11px; font-weight: bold; padding: 2px;"
+        )
+
     def _reload_driver_combo(self, speaker_type: str):
         type_map = {
             SPEAKER_TYPE_SUB: "subwoofer",
@@ -969,10 +1023,14 @@ class InputPanel(QWidget):
             "port_slot_width_mm": self.slot_w_spin.value(),
             "port_slot_height_mm":self.slot_h_spin.value(),
             "n_ports":            self.n_ports_spin.value(),
-            # ── Dimensional limits ──
-            "max_width_mm":       self.max_width_spin.value() or None,
-            "max_height_mm":      self.max_height_spin.value() or None,
-            "max_depth_mm":       self.max_length_spin.value() or None,
+            # ── Dimensional constraints (external box dimensions) ──
+            "ext_width_mm":      self.ext_width_spin.value() or None,
+            "ext_height_mm":     self.ext_height_spin.value() or None,
+            "ext_depth_mm":      self.ext_depth_spin.value() or None,
+            "wood_thickness_mm": self.wood_thickness_spin.value(),
+            "max_width_mm":      self.ext_width_spin.value() or None,
+            "max_height_mm":     self.ext_height_spin.value() or None,
+            "max_depth_mm":      self.ext_depth_spin.value() or None,
         }
 
     def set_params(self, params: dict):
@@ -1007,11 +1065,20 @@ class InputPanel(QWidget):
                 if self.geometry_combo.itemData(i) == params["geometry_type"]:
                     self.geometry_combo.setCurrentIndex(i); break
         if "max_width_mm" in params and params["max_width_mm"]:
-            self.max_width_spin.setValue(params["max_width_mm"])
+            self.ext_width_spin.setValue(params["max_width_mm"])
         if "max_height_mm" in params and params["max_height_mm"]:
-            self.max_height_spin.setValue(params["max_height_mm"])
+            self.ext_height_spin.setValue(params["max_height_mm"])
         if "max_depth_mm" in params and params["max_depth_mm"]:
-            self.max_length_spin.setValue(params["max_depth_mm"])
+            self.ext_depth_spin.setValue(params["max_depth_mm"])
+        if "ext_width_mm" in params and params["ext_width_mm"]:
+            self.ext_width_spin.setValue(params["ext_width_mm"])
+        if "ext_height_mm" in params and params["ext_height_mm"]:
+            self.ext_height_spin.setValue(params["ext_height_mm"])
+        if "ext_depth_mm" in params and params["ext_depth_mm"]:
+            self.ext_depth_spin.setValue(params["ext_depth_mm"])
+        if "wood_thickness_mm" in params:
+            self.wood_thickness_spin.setValue(params["wood_thickness_mm"])
+
         # ── Reflex / Bandpass params ──────────────────────────────────────
         if "fb_hz" in params:
             self.fb_spin.setValue(params["fb_hz"])

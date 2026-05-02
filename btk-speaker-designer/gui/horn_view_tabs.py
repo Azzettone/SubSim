@@ -297,6 +297,13 @@ class _SideCanvas(_DragMixin, QWidget):
         title = "SIDE — Profilo laterale" + (" ✎" if is_custom else "")
         self._setup_ax(ax, title)
 
+        # Branch: tromba folded/2-folded → render a strisce orizzontali
+        if self._cabinet_geometry and self._cabinet_geometry.fold_points:
+            self._draw_folded_side(ax, g, sections, is_custom)
+            self.fig.tight_layout(pad=1.2)
+            self.canvas.draw()
+            return
+
         x_vals = np.array([s.x_m     * 100 for s in sections])
         r_vals = np.array([s.radius_m * 100 for s in sections])
         x_full = np.concatenate([[0.0], x_vals])
@@ -329,11 +336,6 @@ class _SideCanvas(_DragMixin, QWidget):
                     xytext=(L_cm*0.72, g.mouth_radius_m*100*1.4),
                     color=C_MOUTH, fontsize=7.5,
                     arrowprops=dict(arrowstyle="->", color=C_MOUTH, lw=0.7))
-
-        # Punti di piega
-        if self._cabinet_geometry and self._cabinet_geometry.fold_points:
-            for fp in self._cabinet_geometry.fold_points:
-                ax.axvline(fp.x_m*100, color=C_FOLD, lw=1.0, ls="--", alpha=0.8)
 
         _hypex = f"T={g.hypex_T:.2f}\n" if g.expansion_type == EXPANSION_HYPEX else ""
         ax.text(0.02, 0.97,
@@ -368,6 +370,266 @@ class _SideCanvas(_DragMixin, QWidget):
         sb = ax.scatter(x_vals, -r_vals, c=C_DRAG, s=36, zorder=6, edgecolors="#FFF", lw=0.6)
         st._btk_scatter = sb._btk_scatter = True
         self.canvas.draw_idle()
+
+    # ── Reflex / Bandpass ─────────────────────────────────────────────────────
+
+    def update_reflex(self, result, driver):
+        """Disegna sezione laterale del cabinet reflex/bandpass."""
+        self._horn_geometry    = None
+        self._cabinet_geometry = None
+        self._custom_sections  = None
+        if MATPLOTLIB_AVAILABLE:
+            self._draw_reflex_side(result, driver)
+
+    def _draw_reflex_side(self, result, driver):
+        """
+        Sezione laterale schematica del cabinet reflex o bandpass.
+        Mostra camere, driver e porta reflex con dimensioni stimate.
+        """
+        try:
+            from ..core.constants import ENCLOSURE_BANDPASS_4, ENCLOSURE_BANDPASS_6
+        except ImportError:
+            ENCLOSURE_BANDPASS_4 = "bandpass_4"
+            ENCLOSURE_BANDPASS_6 = "bandpass_6"
+
+        self.fig.clear()
+        ax = self.fig.add_subplot(111)
+        self._setup_ax(ax, "SIDE — Sezione trasversale cabinet")
+
+        enc_type = result.enclosure_type
+        vf_l = result.box_volume_front_l
+        vr_l = result.box_volume_rear_l
+        port = result.port_front
+        is_bp = enc_type in (ENCLOSURE_BANDPASS_4, ENCLOSURE_BANDPASS_6)
+
+        d_driver_cm  = driver.diameter_inch * 2.54
+        r_outer_cm   = d_driver_cm / 2
+        r_driver_cm  = float(np.sqrt(driver.sd * 1e4 / np.pi)) if driver.sd > 0 else r_outer_cm * 0.75
+
+        if is_bp:
+            total_v_l   = max(vf_l + vr_l, 1.0)
+            total_w_cm  = max(d_driver_cm * 2.2, (total_v_l * 1e-3) ** (1/3) * 100 * 2.2)
+            height_cm   = r_outer_cm * 2.0 * 1.35
+            driver_w_cm = d_driver_cm * 0.12
+            rear_frac   = vr_l / total_v_l
+            x_driver    = total_w_cm * rear_frac
+
+            # Camere
+            for xA, xB, label, vol in [
+                (0, x_driver, f"REAR\n{vr_l:.1f} L\n(chiusa)", vr_l),
+                (x_driver + driver_w_cm, total_w_cm, f"FRONT\n{vf_l:.1f} L", vf_l),
+            ]:
+                ax.add_patch(mpatches.FancyBboxPatch(
+                    (xA, 0), xB - xA, height_cm,
+                    boxstyle="round,pad=0.3", lw=1.5,
+                    edgecolor=C_CABINET, facecolor=C_AX, alpha=0.85,
+                ))
+                ax.text((xA + xB) / 2, height_cm / 2, label,
+                        ha='center', va='center', color=C_TEXT, fontsize=8.5, fontweight='bold')
+
+            # Driver (divisore tra camere)
+            ax.add_patch(mpatches.FancyArrow(
+                x_driver, height_cm / 2 - r_driver_cm, 0, r_driver_cm * 2,
+                width=driver_w_cm * 0.85, head_width=0,
+                color=C_DRIVER, alpha=0.85, zorder=5,
+            ))
+            ax.text(x_driver + driver_w_cm / 2, height_cm * 0.06,
+                    f'{driver.diameter_inch}"', ha='center', va='bottom',
+                    color=C_DRIVER, fontsize=8)
+
+            # Porta (sul pannello frontale)
+            if port:
+                pd_cm = port.diameter_mm / 10
+                pl_cm = port.length_mm / 10
+                py    = height_cm / 2
+                ax.add_patch(mpatches.Rectangle(
+                    (total_w_cm, py - pd_cm / 2), pl_cm, pd_cm,
+                    lw=1.5, edgecolor=C_MOUTH, facecolor=C_FILL, alpha=0.45,
+                ))
+                ax.text(total_w_cm + pl_cm / 2, py + pd_cm / 2 + 1.0,
+                        f"porta Ø{port.diameter_mm:.0f}mm\nL={port.length_mm:.0f}mm",
+                        ha='center', va='bottom', color=C_MOUTH, fontsize=7.5)
+            ax.set_xlim(-1.5, total_w_cm + (port.length_mm / 10 + 5 if port else 5))
+            ax.set_ylim(-3, height_cm + 4)
+
+        else:
+            # Bass-reflex singola camera
+            side_cm = max(d_driver_cm * 1.7, (vf_l * 1e-3) ** (1/3) * 100 * 2.4)
+            height_cm = r_outer_cm * 2.0 * 1.3
+
+            ax.add_patch(mpatches.FancyBboxPatch(
+                (0, 0), side_cm, height_cm,
+                boxstyle="round,pad=0.4", lw=1.8,
+                edgecolor=C_CABINET, facecolor=C_AX, alpha=0.85,
+            ))
+            ax.text(side_cm / 2, height_cm * 0.70,
+                    f"Bass-Reflex\n{vf_l:.1f} L",
+                    ha='center', va='center', color=C_TEXT, fontsize=10, fontweight='bold')
+
+            # Driver (pannello posteriore)
+            ax.add_patch(mpatches.Circle((0, height_cm / 2), r_driver_cm,
+                lw=2, edgecolor=C_DRIVER, facecolor=C_DRIVER, alpha=0.22))
+            ax.add_patch(mpatches.Circle((0, height_cm / 2), r_driver_cm,
+                lw=2, edgecolor=C_DRIVER, facecolor='none'))
+            ax.text(0 + 1.5, height_cm * 0.08, f'Driver {driver.diameter_inch}"',
+                    ha='left', va='bottom', color=C_DRIVER, fontsize=8)
+
+            # Porta (pannello frontale)
+            if port:
+                pd_cm = port.diameter_mm / 10
+                pl_cm = port.length_mm / 10
+                py    = height_cm / 3
+                ax.add_patch(mpatches.Rectangle(
+                    (side_cm, py - pd_cm / 2), pl_cm, pd_cm,
+                    lw=1.5, edgecolor=C_MOUTH, facecolor=C_FILL, alpha=0.45,
+                ))
+                ax.text(side_cm + pl_cm / 2, py + pd_cm / 2 + 1.0,
+                        f"porta Ø{port.diameter_mm:.0f}mm\nL={port.length_mm:.0f}mm\n"
+                        f"Fb={result.tuning_freq_hz:.0f}Hz",
+                        ha='center', va='bottom', color=C_MOUTH, fontsize=7.5)
+            ax.set_xlim(-2, side_cm + (port.length_mm / 10 + 8 if port else 8))
+            ax.set_ylim(-3, height_cm + 5)
+
+        # Info box
+        fb  = result.tuning_freq_hz
+        f3l = result.f3_low_hz
+        f3h = result.f3_high_hz
+        ax.text(0.02, 0.97,
+                f"Fb = {fb:.0f} Hz  |  F3: [{f3l:.0f}–{f3h:.0f}] Hz\n"
+                f"{driver.manufacturer} {driver.model}  ({driver.diameter_inch}\")",
+                transform=ax.transAxes, va='top', color=C_TEXT, fontsize=8,
+                bbox=dict(boxstyle='round,pad=0.3', fc=C_BG, alpha=0.75, ec=C_GRID))
+        if result.warnings:
+            warn = "\n".join(f"⚠ {w[:65]}" for w in result.warnings[:2])
+            ax.text(0.02, 0.03, warn, transform=ax.transAxes,
+                    va='bottom', color=C_ORANGE, fontsize=7.5,
+                    bbox=dict(boxstyle='round,pad=0.2', fc=C_BG, alpha=0.7, ec=C_ORANGE))
+
+        ax.set_xlabel("Profondità (cm)", color=C_SUBTLE, fontsize=8)
+        ax.set_ylabel("Altezza (cm)",    color=C_SUBTLE, fontsize=8)
+        self.fig.tight_layout(pad=1.2)
+        self.canvas.draw()
+
+    # ── Folded horn rendering ──────────────────────────────────────────────────
+
+    def _draw_folded_side(self, ax, g, sections, is_custom):
+        """
+        Rendering SIDE per tromba folded/2-folded.
+        Disegna ogni segmento come striscia orizzontale impilata verticalmente;
+        le pieghe sono collegate da frecce direzionali.
+        """
+        cab       = self._cabinet_geometry
+        fold_pts  = sorted(cab.fold_points, key=lambda fp: fp.x_m)
+        L_m       = g.horn_length_m
+        bounds_m  = [0.0] + [fp.x_m for fp in fold_pts] + [L_m]
+        n_segs    = len(bounds_m) - 1
+        GAP_CM    = 2.5
+        dot_col   = C_DRAG if is_custom else C_PROFILE
+        SEG_COLS  = [C_PROFILE, C_FOLD, C_GREEN, C_ORANGE]
+
+        # ── per ogni segmento calcola (xs, rs) nel sistema locale ──────────
+        strips = []
+        for i in range(n_segs):
+            x0_m, x1_m = bounds_m[i], bounds_m[i + 1]
+            seg_sects   = [s for s in sections if x0_m - 1e-9 <= s.x_m <= x1_m + 1e-9]
+            seg_len_cm  = (x1_m - x0_m) * 100
+
+            r_start = g.throat_radius_m * 100 if i == 0 else fold_pts[i - 1].height_m * 50.0
+            pts_x = np.array([0.0] + [(s.x_m - x0_m) * 100 for s in seg_sects])
+            pts_r = np.array([r_start] + [s.radius_m * 100 for s in seg_sects])
+
+            if i % 2 == 1:          # segmenti dispari vanno a sinistra
+                pts_x = seg_len_cm - pts_x[::-1]
+                pts_r = pts_r[::-1]
+
+            strips.append({
+                'xs':          pts_x,
+                'rs':          pts_r,
+                'seg_len_cm':  seg_len_cm,
+                'going_right': (i % 2 == 0),
+            })
+
+        # ── Y center per ogni strip (impilate dall'alto) ──────────────────
+        y_tops, y_cur = [], 0.0
+        for s in strips:
+            r_max  = float(s['rs'].max()) if len(s['rs']) else 5.0
+            y_tops.append(y_cur - r_max)
+            y_cur  = y_tops[-1] - r_max - GAP_CM
+        y_offset = (y_tops[0] + y_tops[-1]) / 2
+        y_centers = [y - y_offset for y in y_tops]
+
+        x_max_cm = max((s['seg_len_cm'] for s in strips), default=1.0)
+
+        # ── disegna ogni segmento ─────────────────────────────────────────
+        for i, (strip, y_c) in enumerate(zip(strips, y_centers)):
+            col = SEG_COLS[i % len(SEG_COLS)]
+            xs, rs = strip['xs'], strip['rs']
+
+            ax.fill_between(xs, y_c + rs, y_c - rs, alpha=0.13, color=col)
+            lt, = ax.plot(xs, y_c + rs, color=col, lw=2.0)
+            lb, = ax.plot(xs, y_c - rs, color=col, lw=2.0)
+            lt._btk_profile = lb._btk_profile = True
+
+            if len(xs) > 1:
+                st = ax.scatter(xs[1:], y_c + rs[1:], c=dot_col, s=28, zorder=5,
+                                edgecolors='#FFF', lw=0.45)
+                sb = ax.scatter(xs[1:], y_c - rs[1:], c=dot_col, s=28, zorder=5,
+                                edgecolors='#FFF', lw=0.45)
+                st._btk_scatter = sb._btk_scatter = True
+
+            ax.axhline(y_c, color=C_AXIS, lw=0.45, ls='--', alpha=0.3)
+
+            if i == 0:
+                lbl = "◀ Gola"
+            elif i == n_segs - 1:
+                lbl = "Bocca ▶"
+            else:
+                lbl = f"Seg. {i + 1}"
+            ax.text(float(np.mean(xs)), y_c + float(rs.max()) + 0.7,
+                    lbl, ha='center', va='bottom', color=col, fontsize=7.5)
+
+        # ── frecce di connessione alle pieghe ─────────────────────────────
+        for i, fp in enumerate(fold_pts):
+            s_i   = strips[i]
+            x_loc = (fp.x_m - bounds_m[i]) * 100
+            if not s_i['going_right']:
+                x_loc = s_i['seg_len_cm'] - x_loc
+            y1, y2 = y_centers[i], y_centers[i + 1]
+            ax.annotate("", xytext=(x_loc, y1), xy=(x_loc, y2),
+                        arrowprops=dict(arrowstyle="-|>", color=C_FOLD,
+                                        lw=1.3, mutation_scale=10))
+            ax.text(x_loc + 0.4, (y1 + y2) / 2,
+                    f"  piega {i + 1}\n  @{fp.x_m * 100:.0f}cm",
+                    color=C_FOLD, fontsize=7, va='center')
+
+        # ── annotazioni gola / bocca ──────────────────────────────────────
+        r_t_cm = g.throat_radius_m * 100
+        r_m_cm = g.mouth_radius_m  * 100
+        ax.annotate(f"Gola Ø{g.throat_diameter_m * 100:.1f}cm",
+                    xy=(0, y_centers[0] + r_t_cm),
+                    xytext=(x_max_cm * 0.3, y_centers[0] + r_t_cm + 2.5),
+                    color=C_THROAT, fontsize=7.5,
+                    arrowprops=dict(arrowstyle='->', color=C_THROAT, lw=0.7))
+        xs_last = strips[-1]['xs']
+        x_mouth = float(xs_last[-1]) if len(xs_last) else strips[-1]['seg_len_cm']
+        ax.annotate(f"Bocca Ø{g.mouth_diameter_m * 100:.1f}cm",
+                    xy=(x_mouth, y_centers[-1] + r_m_cm),
+                    xytext=(x_max_cm * 0.55, y_centers[-1] + r_m_cm + 2.5),
+                    color=C_MOUTH, fontsize=7.5,
+                    arrowprops=dict(arrowstyle='->', color=C_MOUTH, lw=0.7))
+
+        # ── info box ─────────────────────────────────────────────────────
+        n_folds  = len(fold_pts)
+        fold_lbl = f"Folded {n_folds}×" if n_folds > 1 else "Folded"
+        ax.text(0.02, 0.97,
+                f"{fold_lbl}  L={g.horn_length_m * 100:.1f}cm\n"
+                f"Fc={g.cutoff_frequency_hz:.0f}Hz  {g.expansion_type}\n"
+                f"Cabinet: {cab.total_depth_mm:.0f}×{cab.total_height_mm:.0f}mm (D×H)",
+                transform=ax.transAxes, va='top', color=C_TEXT, fontsize=8,
+                bbox=dict(boxstyle='round,pad=0.3', fc=C_BG, alpha=0.7, ec=C_GRID))
+
+        ax.set_xlabel("Profondità segmento (cm)", color=C_SUBTLE, fontsize=8)
+        ax.set_ylabel("Layout verticale (cm)",    color=C_SUBTLE, fontsize=8)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -616,6 +878,83 @@ class _FrontCanvas(QWidget):
         self.fig.tight_layout(pad=1.2)
         self.canvas.draw()
 
+    # ── Reflex ────────────────────────────────────────────────────────────────
+
+    def update_reflex(self, result, driver):
+        """Vista frontale del pannello del cabinet reflex/bandpass."""
+        self._horn_geometry    = None
+        self._cabinet_geometry = None
+        if MATPLOTLIB_AVAILABLE:
+            self._draw_reflex_front(result, driver)
+
+    def _draw_reflex_front(self, result, driver):
+        """
+        Vista frontale schematica: pannello frontale con driver (tratteggiato,
+        sul retro) e porta(e) reflex.
+        """
+        try:
+            from ..core.constants import ENCLOSURE_BANDPASS_4, ENCLOSURE_BANDPASS_6
+        except ImportError:
+            ENCLOSURE_BANDPASS_4 = "bandpass_4"
+            ENCLOSURE_BANDPASS_6 = "bandpass_6"
+
+        self.fig.clear()
+        ax = self.fig.add_subplot(111)
+        self._setup_ax(ax, "FRONT — Pannello frontale")
+
+        enc_type    = result.enclosure_type
+        is_bp       = enc_type in (ENCLOSURE_BANDPASS_4, ENCLOSURE_BANDPASS_6)
+        r_outer_cm  = driver.diameter_inch * 2.54 / 2
+        r_driver_cm = float(np.sqrt(driver.sd * 1e4 / np.pi)) if driver.sd > 0 else r_outer_cm * 0.75
+        cab_w       = r_outer_cm * 2.4
+        cab_h       = r_outer_cm * 2.2
+
+        # Bounding box cabinet
+        ax.add_patch(mpatches.Rectangle(
+            (-cab_w / 2, -cab_h / 2), cab_w, cab_h,
+            lw=1.8, edgecolor=C_CABINET, facecolor=C_CABINET, alpha=0.12,
+        ))
+
+        if not is_bp:
+            # Driver (tratteggiato = pannello posteriore, visibile in trasparenza)
+            ax.add_patch(mpatches.Circle((0, 0), r_driver_cm,
+                lw=1.5, edgecolor=C_DRIVER, facecolor=C_DRIVER, alpha=0.10, ls='--'))
+            ax.add_patch(mpatches.Circle((0, 0), r_driver_cm,
+                lw=1.5, edgecolor=C_DRIVER, facecolor='none', ls='--'))
+            ax.text(0, 0, f'{driver.diameter_inch}"',
+                    ha='center', va='center', color=C_DRIVER,
+                    fontsize=10, fontweight='bold', alpha=0.65)
+
+        # Porta(e) reflex sul pannello frontale
+        port = result.port_front
+        if port:
+            n        = max(1, int(port.n_ports))
+            pd_cm    = port.diameter_mm / 10
+            offset_x = -cab_w * 0.15
+            for p_i in range(n):
+                oy = (p_i - (n - 1) / 2) * (pd_cm * 2.6)
+                py = -r_outer_cm * 0.45 + oy
+                ax.add_patch(mpatches.Circle(
+                    (offset_x, py), pd_cm / 2,
+                    lw=2.0, edgecolor=C_MOUTH, facecolor=C_FILL, alpha=0.40,
+                ))
+                ax.add_patch(mpatches.Circle(
+                    (offset_x, py), pd_cm / 2,
+                    lw=2.0, edgecolor=C_MOUTH, facecolor='none',
+                ))
+            lbl_y = -r_outer_cm * 0.45 - (n - 1) / 2 * pd_cm * 2.6 - pd_cm / 2 - 1.2
+            ax.text(offset_x, lbl_y,
+                    f"{n}× porta Ø{port.diameter_mm:.0f}mm\nFb={result.tuning_freq_hz:.0f}Hz",
+                    ha='center', va='top', color=C_MOUTH, fontsize=8.5)
+
+        margin = max(cab_w, cab_h) / 2 * 1.3
+        ax.set_xlim(-margin, margin)
+        ax.set_ylim(-margin, margin)
+        ax.set_xlabel("Larghezza (cm)", color=C_SUBTLE, fontsize=8)
+        ax.set_ylabel("Altezza (cm)",   color=C_SUBTLE, fontsize=8)
+        self.fig.tight_layout(pad=1.2)
+        self.canvas.draw()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 3D VIEW — rendering matplotlib 3D
@@ -829,6 +1168,25 @@ class HornViewTabs(QWidget):
             self._pending_3d_update = False
         else:
             self._pending_3d_update = True   # aggiorna quando si apre il tab 3D
+
+    def update_reflex(self, result, driver):
+        """
+        Aggiorna tutte le viste con il risultato di un calcolo reflex/bandpass.
+        SIDE: sezione trasversale con camere e porta.
+        FRONT: pannello frontale con driver e porta.
+        TOP e 3D: placeholder.
+        """
+        self._horn_geometry    = None
+        self._cabinet_geometry = None
+        self._pending_3d_update = False
+        self._side_view.update_reflex(result, driver)
+        self._front_view.update_reflex(result, driver)
+        # TOP e 3D non hanno ancora un render reflex dedicato
+        # → mostrano placeholder temporaneo
+        if hasattr(self._top_view, '_draw_placeholder'):
+            self._top_view._draw_placeholder()
+        if hasattr(self._3d_view, '_draw_placeholder'):
+            self._3d_view._draw_placeholder()
 
     # ── Slot ────────────────────────────────────────────────────────────────
 
