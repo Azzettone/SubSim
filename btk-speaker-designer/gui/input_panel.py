@@ -366,6 +366,33 @@ class InputPanel(QWidget):
         self.driver_info_label.setWordWrap(True)
         vbox.addWidget(self.driver_info_label)
 
+        # ══ [4b] DRIVER HF — visibile solo FULLRANGE ════════════════════════
+        hf_drv_layout = QGridLayout()
+        hf_drv_layout.setVerticalSpacing(4)
+        hf_drv_layout.setHorizontalSpacing(8)
+        hf_drv_layout.setColumnStretch(1, 1)
+        hf_drv_layout.addWidget(QLabel("Driver HF (CD):"), 0, 0)
+        hf_drv_row_w = QWidget()
+        hf_drv_row_l = QHBoxLayout(hf_drv_row_w)
+        hf_drv_row_l.setContentsMargins(0, 0, 0, 0)
+        hf_drv_row_l.setSpacing(4)
+        self.hf_combo = QComboBox()
+        self.hf_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.hf_combo.currentIndexChanged.connect(self._on_hf_combo_changed)
+        hf_browse_btn = QPushButton("...")
+        hf_browse_btn.setFixedWidth(32)
+        hf_browse_btn.setToolTip("Selettore driver HF (compression driver)")
+        hf_browse_btn.clicked.connect(self._open_hf_driver_picker)
+        hf_drv_row_l.addWidget(self.hf_combo, 1)
+        hf_drv_row_l.addWidget(hf_browse_btn)
+        hf_drv_layout.addWidget(hf_drv_row_w, 0, 1)
+        self.hf_info_label = QLabel("Nessun driver HF selezionato")
+        self.hf_info_label.setStyleSheet("color: #707090; font-size: 11px;")
+        self.hf_info_label.setWordWrap(True)
+        hf_drv_layout.addWidget(self.hf_info_label, 1, 0, 1, 2)
+        self.gb_hf_driver = self._group("DRIVER HF (Compression Driver)", hf_drv_layout)
+        vbox.addWidget(self.gb_hf_driver)
+
         vbox.addWidget(self._hsep())
 
         # ══ [5a] PARAMETRI TROMBA (QGroupBox, visibile solo per horn) ════
@@ -645,36 +672,13 @@ class InputPanel(QWidget):
         self.gb_counts = self._group("NUMERO SEZIONI / PORTE", counts_layout)
         vbox.addWidget(self.gb_counts)
 
-        # ══ [9] FULLRANGE — driver HF + crossover (visibile solo FULLRANGE) ═
+        # ══ [9] FULLRANGE — parametri tromba HF + crossover ════════════════
         fr_layout = QGridLayout()
         fr_layout.setVerticalSpacing(4)
         fr_layout.setHorizontalSpacing(8)
         fr_layout.setColumnStretch(1, 1)
 
         r = 0
-        fr_layout.addWidget(QLabel("Driver HF (CD):"), r, 0)
-        hf_row_w = QWidget()
-        hf_row_l = QHBoxLayout(hf_row_w)
-        hf_row_l.setContentsMargins(0, 0, 0, 0)
-        hf_row_l.setSpacing(4)
-        self.hf_combo = QComboBox()
-        self.hf_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.hf_combo.currentIndexChanged.connect(self._on_hf_combo_changed)
-        hf_browse_btn = QPushButton("...")
-        hf_browse_btn.setFixedWidth(32)
-        hf_browse_btn.setToolTip("Selettore driver HF (compression driver)")
-        hf_browse_btn.clicked.connect(self._open_hf_driver_picker)
-        hf_row_l.addWidget(self.hf_combo, 1)
-        hf_row_l.addWidget(hf_browse_btn)
-        fr_layout.addWidget(hf_row_w, r, 1)
-        r += 1
-
-        self.hf_info_label = QLabel("Nessun driver HF selezionato")
-        self.hf_info_label.setStyleSheet("color: #707090; font-size: 11px;")
-        self.hf_info_label.setWordWrap(True)
-        fr_layout.addWidget(self.hf_info_label, r, 0, 1, 2)
-        r += 1
-
         fr_layout.addWidget(QLabel("Fc HF taglio:"), r, 0)
         self.hf_fc_spin = QDoubleSpinBox()
         self.hf_fc_spin.setRange(100, 5000)
@@ -732,7 +736,7 @@ class InputPanel(QWidget):
             self.xover_type_combo.addItem(label, val)
         fr_layout.addWidget(self.xover_type_combo, r, 1)
 
-        self.gb_fullrange = self._group("FULLRANGE: DRIVER HF + CROSSOVER", fr_layout)
+        self.gb_fullrange = self._group("FULLRANGE: PARAMETRI TROMBA HF + CROSSOVER", fr_layout)
         vbox.addWidget(self.gb_fullrange)
 
         # Spacer finale nello scroll
@@ -816,6 +820,7 @@ class InputPanel(QWidget):
 
         # Fullrange: visibile solo quando speaker_type == FULLRANGE
         is_fullrange = (self.type_combo.currentData() == SPEAKER_TYPE_FULLRANGE)
+        self.gb_hf_driver.setVisible(is_fullrange)
         self.gb_fullrange.setVisible(is_fullrange)
         if is_fullrange and not self.hf_combo.count():
             self._reload_hf_combo()
@@ -839,11 +844,42 @@ class InputPanel(QWidget):
         self._reload_driver_combo(speaker_type)
         self._update_section_visibility()
 
+    _EXPANSION_INFO = {
+        "exponential": (
+            "✓ Efficienza costante sull'intera banda\n"
+            "✓ Taglio in frequenza netto\n"
+            "✗ Fase non lineare\n"
+            "  Rif: Webster (1919), Olson (1957)"
+        ),
+        "conical": (
+            "✓ Costruzione semplice (sezioni piatte)\n"
+            "✓ Alta efficienza a bassa frequenza\n"
+            "✗ Riflessione alla bocca (rottura di carico)\n"
+            "  Rif: Olson (1947)"
+        ),
+        "tractrix": (
+            "✓ Risposta in fase lineare\n"
+            "✓ Diffrazione ridotta alla bocca\n"
+            "✓ Minima riflessione interna\n"
+            "✗ Lunghezza maggiore a parità di Fc\n"
+            "  Rif: Klipsch (1941) JASA 13:137"
+        ),
+        "hypex": (
+            "✓ Compromesso ottimale (T regolabile)\n"
+            "✓ Migliore risposta in fase rispetto all'esponenziale\n"
+            "✓ T=0 → cosh², T=0.5 → Hypex, T→1 → exp\n"
+            "✗ Calcolo più complesso\n"
+            "  Rif: Salmon (1946) JASA 17:212"
+        ),
+    }
+
     def _on_expansion_changed(self):
-        """Mostra/nasconde Hypex T."""
-        is_hypex = (self.expansion_combo.currentData() == EXPANSION_HYPEX)
+        """Mostra/nasconde Hypex T e aggiorna tooltip dell'expansion combo."""
+        exp = self.expansion_combo.currentData()
+        is_hypex = (exp == EXPANSION_HYPEX)
         self._hypex_t_label.setVisible(is_hypex)
         self._hypex_t_spin.setVisible(is_hypex)
+        self.expansion_combo.setToolTip(self._EXPANSION_INFO.get(exp, ""))
 
     def _on_port_type_changed(self):
         """Mostra campo diametro o dimensioni slot."""

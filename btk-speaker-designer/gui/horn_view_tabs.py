@@ -345,8 +345,20 @@ class _SideCanvas(_DragMixin, QWidget):
                 transform=ax.transAxes, va="top", color=C_TEXT, fontsize=8,
                 bbox=dict(boxstyle="round,pad=0.3", fc=C_BG, alpha=0.7, ec=C_GRID))
 
-        ax.set_xlabel("Asse (cm)", color=C_SUBTLE, fontsize=8)
-        ax.set_ylabel("Raggio (cm)", color=C_SUBTLE, fontsize=8)
+        # ── scala coerente con TOP (stesso X per confronto profondità) ──────
+        L_cm      = g.horn_length_m * 100
+        r_max_cm  = float(r_full.max()) if len(r_full) else g.mouth_radius_m * 100
+        if self._cabinet_geometry:
+            h_cm = self._cabinet_geometry.total_height_mm / 10
+            r_max_cm = max(r_max_cm, h_cm / 2)
+            x_end    = self._cabinet_geometry.total_depth_mm / 10
+        else:
+            x_end = L_cm
+        ax.set_xlim(-x_end * 0.04, x_end * 1.06)
+        ax.set_ylim(-r_max_cm * 1.25, r_max_cm * 1.25)
+
+        ax.set_xlabel("Asse / Profondità (cm)", color=C_SUBTLE, fontsize=8)
+        ax.set_ylabel("Raggio / Altezza (cm)", color=C_SUBTLE, fontsize=8)
         self.fig.tight_layout(pad=1.2)
         self.canvas.draw()
 
@@ -672,7 +684,7 @@ class _TopCanvas(_DragMixin, QWidget):
         for sp in ax.spines.values():
             sp.set_color(C_GRID)
         ax.grid(True, color=C_GRID, linewidth=0.5, alpha=0.7)
-        ax.set_aspect("equal", adjustable="datalim")
+        # NON usa set_aspect("equal") — asse X uguale a SIDE per confronto profondità
 
     def _draw_placeholder(self):
         self.fig.clear()
@@ -730,6 +742,18 @@ class _TopCanvas(_DragMixin, QWidget):
         ax.axvline(0,                  color=C_THROAT, lw=1.0, ls=":", alpha=0.7)
         ax.axvline(g.horn_length_m*100, color=C_MOUTH,  lw=1.0, ls=":", alpha=0.7)
         ax.axhline(0, color=C_AXIS, lw=0.6, ls="--", alpha=0.5)
+
+        # ── scala identica a SIDE: stesso X, Y = larghezza cabinet ──────────
+        L_cm      = g.horn_length_m * 100
+        r_max_cm  = float(r_full.max()) if len(r_full) else g.mouth_radius_m * 100
+        if self._cabinet_geometry:
+            w_cm     = self._cabinet_geometry.total_width_mm / 10
+            x_end    = self._cabinet_geometry.total_depth_mm / 10
+            r_max_cm = max(r_max_cm, w_cm / 2)
+        else:
+            x_end = L_cm
+        ax.set_xlim(-x_end * 0.04, x_end * 1.06)
+        ax.set_ylim(-r_max_cm * 1.25, r_max_cm * 1.25)
 
         ax.set_xlabel("Profondità (cm)", color=C_SUBTLE, fontsize=8)
         ax.set_ylabel("Larghezza (cm)",  color=C_SUBTLE, fontsize=8)
@@ -1000,32 +1024,32 @@ class _3DCanvas(QWidget):
     def _draw_3d(self):
         if self._horn_geometry is None:
             return
-        g       = self._horn_geometry
-        sects   = list(g.sections)
+        g     = self._horn_geometry
+        sects = list(g.sections)
+        cab   = self._cabinet_geometry
 
         # Profilo del horn
-        x_vals = np.array([0.0] + [s.x_m*100      for s in sects])
-        r_vals = np.array([g.throat_radius_m*100]  + [s.radius_m*100 for s in sects])
+        x_vals = np.array([0.0] + [s.x_m * 100 for s in sects])
+        r_vals = np.array([g.throat_radius_m * 100] + [s.radius_m * 100 for s in sects])
 
-        # Solid of revolution: rotazione intorno all'asse X
-        n_phi = 36   # segmenti angolari
-        phi   = np.linspace(0, 2*np.pi, n_phi)
+        # Aspect ratio da cabinet (default: quadrato = 1.0)
+        if cab and cab.total_width_mm > 0 and cab.total_height_mm > 0:
+            asp = cab.total_width_mm / cab.total_height_mm
+        else:
+            asp = 1.0
 
-        # Mesh: X, Y, Z
-        # X = posizione asse (invariante per phi), Y = r·cos(phi), Z = r·sin(phi)
-        X = np.tile(x_vals, (n_phi, 1))           # (n_phi, n_x)
-        R = np.tile(r_vals, (n_phi, 1))           # (n_phi, n_x)
-        PHI = np.tile(phi[:, np.newaxis], (1, len(x_vals)))
-        Y = R * np.cos(PHI)
-        Z = R * np.sin(PHI)
+        # Dimensioni rettangolari per ogni sezione
+        # half-width (Z) e half-height (Y) = r√asp e r/√asp
+        sqrt_asp  = float(np.sqrt(asp))
+        hw_vals   = r_vals * sqrt_asp    # half-width  (+Z/-Z)
+        hh_vals   = r_vals / sqrt_asp    # half-height (+Y/-Y)
 
         self.fig.clear()
         try:
             ax = self.fig.add_subplot(111, projection="3d")
         except Exception:
-            # Fallback se mpl_toolkits non disponibile
             ax = self.fig.add_subplot(111)
-            ax.text(0.5, 0.5, "mpl_toolkits.mplot3d non disponibile.\nInstalla matplotlib >= 3.5",
+            ax.text(0.5, 0.5, "mpl_toolkits.mplot3d non disponibile.",
                     ha="center", va="center", color=C_SUBTLE, transform=ax.transAxes)
             self.canvas.draw()
             return
@@ -1033,37 +1057,94 @@ class _3DCanvas(QWidget):
         ax.set_facecolor(C_AX)
         self.fig.patch.set_facecolor(C_BG)
 
-        # Superficie horn
-        ax.plot_surface(X, Y, Z,
-                        color=C_FILL, alpha=0.35, linewidth=0,
-                        antialiased=True)
-        # Wireframe bordi
-        ax.plot_wireframe(X, Y, Z,
-                          color=C_PROFILE, alpha=0.45, linewidth=0.4,
-                          rstride=4, cstride=1)
+        try:
+            from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+        except ImportError:
+            Poly3DCollection = None
 
-        # Cerchi gola e bocca
-        phi_c = np.linspace(0, 2*np.pi, 100)
-        r_t = g.throat_radius_m * 100
-        r_m = g.mouth_radius_m  * 100
-        ax.plot(np.zeros(100), r_t*np.cos(phi_c), r_t*np.sin(phi_c),
-                color=C_THROAT, lw=1.5, alpha=0.9)
-        ax.plot(np.full(100, g.horn_length_m*100), r_m*np.cos(phi_c), r_m*np.sin(phi_c),
-                color=C_MOUTH, lw=1.5, alpha=0.9)
+        # ── Disegna le 4 pareti come superfici piatte (top, bottom, left, right) ──
+        n = len(x_vals)
+        wall_polys = []
+        wall_alpha = 0.28
 
-        # Assi
-        ax.set_xlabel("Asse (cm)", color=C_SUBTLE, fontsize=7, labelpad=3)
-        ax.set_ylabel("Y (cm)",    color=C_SUBTLE, fontsize=7, labelpad=3)
-        ax.set_zlabel("Z (cm)",    color=C_SUBTLE, fontsize=7, labelpad=3)
+        for i in range(n - 1):
+            x0, x1   = x_vals[i], x_vals[i + 1]
+            hw0, hw1 = hw_vals[i], hw_vals[i + 1]
+            hh0, hh1 = hh_vals[i], hh_vals[i + 1]
+
+            # Top wall  (+Y, varia Z)
+            wall_polys.append([(x0, hh0,  hw0), (x1, hh1,  hw1),
+                                (x1, hh1, -hw1), (x0, hh0, -hw0)])
+            # Bottom wall (-Y, varia Z)
+            wall_polys.append([(x0, -hh0,  hw0), (x1, -hh1,  hw1),
+                                (x1, -hh1, -hw1), (x0, -hh0, -hw0)])
+            # Left wall  (-Z, varia Y)
+            wall_polys.append([(x0, -hh0, hw0), (x1, -hh1, hw1),
+                                (x1,  hh1, hw1), (x0,  hh0, hw0)])
+            # Right wall (+Z, varia Y)
+            wall_polys.append([(x0, -hh0, -hw0), (x1, -hh1, -hw1),
+                                (x1,  hh1, -hw1), (x0,  hh0, -hw0)])
+
+        if Poly3DCollection and wall_polys:
+            pc = Poly3DCollection(wall_polys,
+                                  facecolor=C_FILL, alpha=wall_alpha,
+                                  edgecolor=C_PROFILE, linewidth=0.35)
+            ax.add_collection3d(pc)
+
+        # ── Pannello gola (rettangolo anteriore) ─────────────────────────────
+        hw_t, hh_t = hw_vals[0], hh_vals[0]
+        throat_face = [(-hw_t, hh_t, 0.0), (hw_t, hh_t, 0.0),
+                       (hw_t, -hh_t, 0.0), (-hw_t, -hh_t, 0.0)]
+        # Converti a (x, y, z) con x=0
+        throat_face_xyz = [(0.0, y, z) for z, y, _ in throat_face]
+        if Poly3DCollection:
+            ax.add_collection3d(Poly3DCollection(
+                [throat_face_xyz], facecolor=C_THROAT,
+                alpha=0.35, edgecolor=C_THROAT, linewidth=1.2))
+
+        # ── Pannello bocca (rettangolo posteriore) ────────────────────────────
+        x_m   = x_vals[-1]
+        hw_m, hh_m = hw_vals[-1], hh_vals[-1]
+        mouth_face_xyz = [(x_m, hh_m, hw_m), (x_m, hh_m, -hw_m),
+                          (x_m, -hh_m, -hw_m), (x_m, -hh_m, hw_m)]
+        if Poly3DCollection:
+            ax.add_collection3d(Poly3DCollection(
+                [mouth_face_xyz], facecolor=C_MOUTH,
+                alpha=0.30, edgecolor=C_MOUTH, linewidth=1.2))
+
+        # ── Bordi profilo (wireframe asse) ────────────────────────────────────
+        for sign_y, sign_z in [(1, 1), (1, -1), (-1, 1), (-1, -1)]:
+            ax.plot(x_vals, sign_y * hh_vals, sign_z * hw_vals,
+                    color=C_PROFILE, lw=0.8, alpha=0.8)
+
+        # ── Bounding box cabinet esterno (se disponibile) ─────────────────────
+        if cab:
+            L  = cab.total_depth_mm  / 10
+            W  = cab.total_width_mm  / 10 / 2
+            H  = cab.total_height_mm / 10 / 2
+            bb_verts = np.array([
+                [0, -H, -W], [0, -H, W], [0, H, W], [0, H, -W],
+                [L, -H, -W], [L, -H, W], [L, H, W], [L, H, -W],
+            ])
+            edges = [(0,1),(1,2),(2,3),(3,0), (4,5),(5,6),(6,7),(7,4),
+                     (0,4),(1,5),(2,6),(3,7)]
+            for a_i, b_i in edges:
+                ax.plot(*zip(bb_verts[a_i], bb_verts[b_i]),
+                        color=C_CABINET, lw=0.8, ls="--", alpha=0.55)
+
+        # ── Assi e labels ─────────────────────────────────────────────────────
+        ax.set_xlabel("Profondità (cm)", color=C_SUBTLE, fontsize=7, labelpad=3)
+        ax.set_ylabel("Altezza (cm)",    color=C_SUBTLE, fontsize=7, labelpad=3)
+        ax.set_zlabel("Larghezza (cm)",  color=C_SUBTLE, fontsize=7, labelpad=3)
         ax.tick_params(colors=C_SUBTLE, labelsize=7)
-        ax.xaxis.pane.set_edgecolor(C_GRID)
-        ax.yaxis.pane.set_edgecolor(C_GRID)
-        ax.zaxis.pane.set_edgecolor(C_GRID)
-        ax.xaxis.pane.fill = False
-        ax.yaxis.pane.fill = False
-        ax.zaxis.pane.fill = False
-        ax.set_title(f"3D — {g.expansion_type}  Fc={g.cutoff_frequency_hz:.0f}Hz",
-                     color=C_TEXT, fontsize=9, pad=6)
+        for pane in (ax.xaxis.pane, ax.yaxis.pane, ax.zaxis.pane):
+            pane.set_edgecolor(C_GRID)
+            pane.fill = False
+        ax.set_title(
+            f"3D — {g.expansion_type}  Fc={g.cutoff_frequency_hz:.0f}Hz"
+            + (f"  {cab.total_depth_mm:.0f}×{cab.total_width_mm:.0f}×"
+               f"{cab.total_height_mm:.0f}mm" if cab else ""),
+            color=C_TEXT, fontsize=9, pad=6)
         try:
             self.fig.tight_layout(pad=1.0)
         except Exception:
