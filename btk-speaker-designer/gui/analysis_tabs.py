@@ -174,6 +174,67 @@ class PhaseMagnitudeTab(QWidget):
         if MATPLOTLIB_AVAILABLE:
             self._redraw()
 
+    def update_from_reflex(self, reflex_result):
+        """Mostra la risposta SPL di un enclosure reflex/bandpass."""
+        if not MATPLOTLIB_AVAILABLE:
+            return
+        import numpy as np
+        freqs = reflex_result.frequencies
+        spl   = reflex_result.spl_db
+
+        self.fig.clear()
+        ax = self.fig.add_subplot(111)
+        _setup_ax(ax, "Risposta in frequenza (Reflex / Bandpass)",
+                  "Frequenza (Hz)", "SPL (dB @ 1W/1m)")
+        ax.semilogx(freqs, spl, color=C_BLUE, linewidth=2.0, label="SPL")
+        ax.axhline(y=max(spl) - 3.0, color=C_ORANGE, linewidth=0.8,
+                   linestyle=":", alpha=0.7, label="−3 dB")
+        if hasattr(reflex_result, "f3_low_hz") and reflex_result.f3_low_hz > 0:
+            ax.axvline(x=reflex_result.f3_low_hz, color=C_ORANGE,
+                       linewidth=1.0, linestyle="--",
+                       label=f"F3 low = {reflex_result.f3_low_hz:.0f} Hz")
+        if hasattr(reflex_result, "f3_high_hz") and reflex_result.f3_high_hz > 0:
+            ax.axvline(x=reflex_result.f3_high_hz, color=C_GREEN,
+                       linewidth=1.0, linestyle="--",
+                       label=f"F3 high = {reflex_result.f3_high_hz:.0f} Hz")
+        ax.set_xlim(20, 1000)
+        ax.legend(fontsize=8, framealpha=0.35, facecolor=C_BG,
+                  edgecolor=C_GRID, labelcolor=C_TEXT)
+        self.fig.tight_layout(pad=1.2)
+        self.canvas.draw()
+
+    def update_from_fullrange(self, result: dict):
+        """Mostra la risposta combinata HF + LF del sistema Fullrange."""
+        if not MATPLOTLIB_AVAILABLE:
+            return
+        import numpy as np
+
+        freqs    = result["frequencies"]
+        hf_spl   = result["hf_spl_db"]
+        lf_spl   = result["lf_spl_db"]
+        combined = result["combined_spl_db"]
+        xover_hz = result.get("crossover_freq_hz", 700)
+
+        self.fig.clear()
+        ax = self.fig.add_subplot(111)
+        _setup_ax(ax, "Risposta Fullrange (HF + LF + Crossover)",
+                  "Frequenza (Hz)", "SPL (dB @ 1W/1m)")
+
+        ax.semilogx(freqs, lf_spl,   color=C_BLUE,   linewidth=1.4,
+                    linestyle="--", alpha=0.7, label="LF (sub)")
+        ax.semilogx(freqs, hf_spl,   color=C_ORANGE,  linewidth=1.4,
+                    linestyle="--", alpha=0.7, label="HF (CD)")
+        ax.semilogx(freqs, combined, color=C_GREEN,   linewidth=2.2,
+                    label="Combinata")
+        ax.axvline(x=xover_hz, color="#FF8080", linewidth=1.0,
+                   linestyle=":", alpha=0.8, label=f"Xover = {xover_hz:.0f} Hz")
+
+        ax.set_xlim(20, 20000)
+        ax.legend(fontsize=8, framealpha=0.35, facecolor=C_BG,
+                  edgecolor=C_GRID, labelcolor=C_TEXT)
+        self.fig.tight_layout(pad=1.2)
+        self.canvas.draw()
+
     # ── Simulazione ──────────────────────────────────────────────────────
 
     def _run_simulation_and_draw(self):
@@ -595,3 +656,29 @@ class AnalysisTabs(QWidget):
             self.impedance_tab._driver = driver
         self.phase_mag_tab.update_from_simulation(sim_result)
         self.impedance_tab.update_from_simulation(sim_result)
+
+    def update_reflex(self, reflex_result, driver=None):
+        """
+        Aggiorna i tab con il risultato di un calcolo reflex/bandpass.
+        Mostra SPL vs frequenza (risposta in camera anecoica) e impedenza driver.
+        """
+        # SPL / Phase tab  — mostra la risposta in frequenza del reflex
+        self.phase_mag_tab.update_from_reflex(reflex_result)
+        # Impedance tab — mostra la curva del driver libero (senza tromba)
+        if driver is not None:
+            self.impedance_tab.update(driver)
+
+    def update_fullrange(self, result: dict, system):
+        """
+        Aggiorna i tab con il risultato di un sistema Fullrange (CD + SUB).
+
+        Args:
+            result: dizionario da ``calculate_combined_response()`` con chiavi
+                    frequencies, hf_spl_db, lf_spl_db, combined_spl_db,
+                    combined_phase_deg, hpf_db, lpf_db, crossover_freq_hz
+            system: FullrangeSystem
+        """
+        self.phase_mag_tab.update_from_fullrange(result)
+        # Impedance: mostra il driver LF
+        if system.lf_driver is not None:
+            self.impedance_tab.update(system.lf_driver)

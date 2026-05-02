@@ -189,20 +189,12 @@ if PYQT_AVAILABLE:
             self.hsplit = QSplitter(Qt.Horizontal)
             top_layout.addWidget(self.hsplit)
 
-            # Colonna sinistra: [input_panel] / [design_panel]
-            self.left_vsplit = QSplitter(Qt.Vertical)
-
+            # Colonna sinistra: solo InputPanel
             from .input_panel import InputPanel
-            from .design_panel import DesignPanel
 
             self.input_panel = InputPanel(self)
-            self.design_panel = DesignPanel(self)
-            self.left_vsplit.addWidget(self.input_panel)
-            self.left_vsplit.addWidget(self.design_panel)
-            self.left_vsplit.setSizes([530, 300])
-            self.left_vsplit.setMinimumWidth(410)
-
-            self.hsplit.addWidget(self.left_vsplit)
+            self.input_panel.setMinimumWidth(410)
+            self.hsplit.addWidget(self.input_panel)
 
             # Area grafica destra: 4 tab (TOP / FRONT / SIDE / 3D)
             from .horn_view_tabs import HornViewTabs
@@ -224,6 +216,7 @@ if PYQT_AVAILABLE:
             self.input_panel.driver_changed.connect(self._on_driver_changed)
             self.input_panel.geometry_changed.connect(self._on_geometry_changed)
             self.horn_view.sections_modified.connect(self._on_sections_modified)
+
         def _build_status_bar(self):
             self.status_bar = QStatusBar()
             self.setStatusBar(self.status_bar)
@@ -240,6 +233,12 @@ if PYQT_AVAILABLE:
                     "Seleziona un driver dal menu a tendina o dal selettore (...)."
                 ))
                 return
+            if params.get("error") == "no_hf_driver":
+                QTimer.singleShot(0, lambda: QMessageBox.warning(
+                    self, "Driver HF mancante",
+                    "Seleziona un Compression Driver nella sezione Fullrange."
+                ))
+                return
 
             driver = params["driver"]
             self._driver = driver
@@ -251,6 +250,19 @@ if PYQT_AVAILABLE:
                 c = speed_of_sound(temp_c)
             except ImportError:
                 c = 331.3 * (1 + temp_c / 273.15) ** 0.5
+
+            # Branch: tipo di enclosure e speaker
+            from ..core.constants import ENCLOSURE_HAS_HORN, SPEAKER_TYPE_FULLRANGE
+            enclosure_type = params.get("enclosure_type", "horn")
+            speaker_type   = params.get("speaker_type", "")
+
+            if speaker_type == SPEAKER_TYPE_FULLRANGE:
+                self._calculate_fullrange(params, driver, c)
+                return
+
+            if enclosure_type not in ENCLOSURE_HAS_HORN:
+                self._calculate_reflex_bandpass(params, driver, c)
+                return
 
             # 1. Calcola geometria tromba
             from ..core.horn_calculator import design_horn
@@ -316,9 +328,7 @@ if PYQT_AVAILABLE:
                 self._horn_geometry, self._cabinet_geometry, driver, wood_price,
                 simulation=simulation
             )
-            self.design_panel.update_cabinet_summary(self._cabinet_geometry)
-            if simulation is not None:
-                self.design_panel.update_physics_warnings(simulation)
+            # (design_panel rimosso — info sintetizzate in analysis_tabs e status bar)
 
             g   = self._horn_geometry
             cab = self._cabinet_geometry
@@ -337,6 +347,140 @@ if PYQT_AVAILABLE:
                 f"Cabinet: {cab.total_width_mm:.0f}×{cab.total_height_mm:.0f}×"
                 f"{cab.total_depth_mm:.0f} mm{sim_info}"
             )
+
+        def _calculate_fullrange(self, params: dict, lf_driver, c: float):
+            """Pipeline di calcolo per sistema Fullrange (CD + SUB)."""
+            hf_driver = params.get("hf_driver")
+            if hf_driver is None:
+                QTimer.singleShot(0, lambda: QMessageBox.warning(
+                    self, "Driver HF mancante",
+                    "Seleziona un Compression Driver per la sezione HF nel pannello Fullrange."
+                ))
+                return
+
+            from ..core.fullrange_combiner import (
+                design_fullrange_system, calculate_combined_response, CrossoverSettings
+            )
+            import numpy as np
+
+            try:
+                system = design_fullrange_system(
+                    hf_driver=hf_driver,
+                    lf_driver=lf_driver,
+                    crossover_freq=params.get("crossover_hz", 700.0),
+                    hf_cutoff_hz=params.get("hf_fc_hz", 700.0),
+                    lf_cutoff_hz=params.get("fc_hz", 50.0),
+                    hf_smouth_ratio=params.get("hf_smouth_ratio", 5.0),
+                    lf_smouth_ratio=params.get("smouth_ratio", 2.0),
+                    hf_compression_ratio=params.get("hf_compression_ratio", 10.0),
+                    lf_compression_ratio=params.get("compression_ratio", 1.0),
+                    crossover_slope=params.get("crossover_slope", 24.0),
+                    c=c,
+                )
+                system.crossover.alignment = params.get("crossover_type", "linkwitz_riley")
+            except Exception as e:
+                _err = str(e)
+                QTimer.singleShot(0, lambda: QMessageBox.critical(
+                    self, "Errore calcolo Fullrange", _err
+                ))
+                return
+
+            # Calcola risposta combinata
+            freqs = np.logspace(np.log10(20), np.log10(20000), 600)
+            try:
+                result = calculate_combined_response(system, freqs, c)
+            except Exception as e:
+                _err = str(e)
+                QTimer.singleShot(0, lambda: QMessageBox.critical(
+                    self, "Errore risposta Fullrange", _err
+                ))
+                return
+
+            # Tieni in cache la geometria LF per la visualizzazione 2D/3D
+            self._horn_geometry = system.lf_horn
+            self._cabinet_geometry = None
+            self._driver = lf_driver
+
+            # Aggiorna visualizzazione 2D/3D con la tromba LF
+            if system.lf_horn is not None:
+                from ..core.geometry import design_straight_horn
+                try:
+                    cab = design_straight_horn(system.lf_horn)
+                    self._cabinet_geometry = cab
+                    self.horn_view.update_horn(system.lf_horn, cab)
+                except Exception:
+                    pass
+
+            # Aggiorna tab analisi
+            self.analysis_tabs.update_fullrange(result, system)
+
+            xover = system.crossover.frequency_hz
+            self.status_bar.showMessage(
+                f"FULLRANGE  │  LF: {lf_driver.manufacturer} {lf_driver.model}  "
+                f"│  HF: {hf_driver.manufacturer} {hf_driver.model}  "
+                f"│  Crossover: {xover:.0f} Hz  "
+                f"│  Slope: {system.crossover.slope_db_octave:.0f} dB/ott  "
+                f"│  Tipo: {system.crossover.alignment}"
+            )
+
+        def _calculate_reflex_bandpass(self, params: dict, driver, c: float):
+            """Pipeline di calcolo per enclosure reflex / bandpass / ibridi."""
+            from ..core.constants import (
+                ENCLOSURE_REFLEX, ENCLOSURE_BANDPASS_4, ENCLOSURE_BANDPASS_6,
+                ENCLOSURE_HORN_REFLEX, ENCLOSURE_BANDPASS_HORN, ENCLOSURE_BANDPASS_REFLEX,
+            )
+            from ..core.enclosure_model import (
+                design_bass_reflex, design_bandpass_4th, design_bandpass_6th,
+            )
+
+            enc = params.get("enclosure_type", ENCLOSURE_REFLEX)
+            fb  = params.get("fb_hz", driver.fs * 0.8)
+            vb  = params.get("box_volume_l", None)
+            f_low  = params.get("f_low_hz", 40.0)
+            f_high = params.get("f_high_hz", 150.0)
+
+            try:
+                if enc in (ENCLOSURE_REFLEX, ENCLOSURE_HORN_REFLEX, ENCLOSURE_BANDPASS_REFLEX):
+                    result = design_bass_reflex(
+                        fs=driver.fs, qts=driver.qts, vas=driver.vas,
+                        sd=driver.sd, xmax=driver.xmax,
+                        fb_hz=fb, box_volume_l=vb, c=c,
+                    )
+                elif enc == ENCLOSURE_BANDPASS_4:
+                    result = design_bandpass_4th(
+                        fs=driver.fs, qts=driver.qts, vas=driver.vas,
+                        sd=driver.sd, xmax=driver.xmax,
+                        f_low=f_low, f_high=f_high, c=c,
+                    )
+                elif enc in (ENCLOSURE_BANDPASS_6, ENCLOSURE_BANDPASS_HORN):
+                    result = design_bandpass_6th(
+                        fs=driver.fs, qts=driver.qts, vas=driver.vas,
+                        sd=driver.sd, xmax=driver.xmax,
+                        f_low=f_low, f_high=f_high, c=c,
+                    )
+                else:
+                    result = design_bass_reflex(
+                        fs=driver.fs, qts=driver.qts, vas=driver.vas,
+                        sd=driver.sd, xmax=driver.xmax,
+                        fb_hz=fb, box_volume_l=vb, c=c,
+                    )
+            except Exception as e:
+                _err = str(e)
+                QTimer.singleShot(0, lambda: QMessageBox.critical(
+                    self, "Errore calcolo enclosure", _err
+                ))
+                return
+
+            # Aggiorna la status bar con risultati sintetici
+            self.status_bar.showMessage(
+                f"Driver: {driver.manufacturer} {driver.model}  |  "
+                f"Enclosure: {enc}  |  "
+                f"Fb = {result.fb_hz:.1f} Hz  |  "
+                f"Vb = {result.box_volume_l:.1f} L  |  "
+                f"F3 [{result.f3_low_hz:.0f}–{result.f3_high_hz:.0f}] Hz"
+            )
+            # Aggiorna i tab di analisi con la risposta reflex/bandpass
+            self.analysis_tabs.update_reflex(result, driver)
 
         def _on_sections_modified(self, custom_sections: list):
             """
@@ -357,7 +501,6 @@ if PYQT_AVAILABLE:
                     horn_geometry=self._horn_geometry,
                     driver=self._driver
                 )
-                self.design_panel.update_physics_warnings(sim)
                 spl_peak = float(__import__('numpy').nanmax(sim.spl_db))
                 warn_tag = f"  ⚠ {len(sim.warnings)}" if sim.warnings else ""
                 self.status_bar.showMessage(
@@ -390,7 +533,6 @@ if PYQT_AVAILABLE:
                     self._cabinet_geometry = design_straight_horn(self._horn_geometry)
 
                 self.horn_view.update_horn(self._horn_geometry, self._cabinet_geometry)
-                self.design_panel.update_cabinet_summary(self._cabinet_geometry)
                 wood_price = 30.0  # costo MDF di default €/m²
                 self.analysis_tabs.panel_list_tab.update(self._cabinet_geometry, wood_price)
             except Exception as e:
@@ -404,7 +546,6 @@ if PYQT_AVAILABLE:
             self._driver = None
             if MATPLOTLIB_AVAILABLE_GUARD():
                 self.horn_view._draw_placeholder()
-            self.design_panel.summary_label.setText("—\n—\n—")
             self.status_bar.showMessage(
                 "Nuovo progetto  —  Seleziona un driver e premi  ⚙ Calcola."
             )
@@ -420,7 +561,6 @@ if PYQT_AVAILABLE:
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 self.input_panel.set_params(data.get("input", {}))
-                self.design_panel.set_params(data.get("design", {}))
                 self.status_bar.showMessage(f"Progetto aperto: {path}")
             except Exception as e:
                 QMessageBox.critical(self, "Errore apertura", str(e))
@@ -436,7 +576,6 @@ if PYQT_AVAILABLE:
                 path += ".btk.json"
             try:
                 input_params = self.input_panel.get_params()
-                design_params = self.design_panel.get_params()
                 driver = input_params.pop("driver", None)
                 if driver and hasattr(driver, "to_dict"):
                     input_params["driver_model"] = driver.model
@@ -444,7 +583,6 @@ if PYQT_AVAILABLE:
                 data = {
                     "version": "1.0",
                     "input": input_params,
-                    "design": design_params,
                 }
                 with open(path, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=2, ensure_ascii=False)

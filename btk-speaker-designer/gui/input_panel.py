@@ -15,7 +15,7 @@ try:
         QFrame, QScrollArea, QLabel, QComboBox, QDoubleSpinBox, QSpinBox,
         QPushButton, QSizePolicy, QDialog, QDialogButtonBox,
         QTableWidget, QTableWidgetItem, QHeaderView, QSplitter,
-        QTextBrowser, QLineEdit, QFormLayout, QGroupBox
+        QTextBrowser, QLineEdit, QFormLayout, QGroupBox, QButtonGroup
     )
     from PyQt5.QtCore import Qt, pyqtSignal as Signal
     from PyQt5.QtGui import QFont
@@ -25,7 +25,7 @@ except ImportError:
         QFrame, QScrollArea, QLabel, QComboBox, QDoubleSpinBox, QSpinBox,
         QPushButton, QSizePolicy, QDialog, QDialogButtonBox,
         QTableWidget, QTableWidgetItem, QHeaderView, QSplitter,
-        QTextBrowser, QLineEdit, QFormLayout, QGroupBox
+        QTextBrowser, QLineEdit, QFormLayout, QGroupBox, QButtonGroup
     )
     from PySide6.QtCore import Qt, Signal
     from PySide6.QtGui import QFont
@@ -34,6 +34,12 @@ from ..core.constants import (
     SPEAKER_TYPE_SUB, SPEAKER_TYPE_CD, SPEAKER_TYPE_FULLRANGE,
     EXPANSION_TYPES, EXPANSION_LABELS, EXPANSION_EXPONENTIAL, EXPANSION_HYPEX,
     GEOMETRY_TYPES, GEOMETRY_LABELS, GEOMETRY_STRAIGHT,
+    ENCLOSURE_CATEGORY_HORN, ENCLOSURE_CATEGORY_REFLEX, ENCLOSURE_CATEGORY_HYBRID,
+    ENCLOSURE_CATEGORIES, ENCLOSURE_CATEGORY_LABELS,
+    ENCLOSURE_VARIANTS, ENCLOSURE_LABELS,
+    ENCLOSURE_HAS_HORN, ENCLOSURE_HAS_REFLEX, ENCLOSURE_IS_BANDPASS,
+    ENCLOSURE_DEFAULT_FOR_SPEAKER,
+    PORT_TYPES, PORT_TYPE_LABELS, PORT_TYPE_CIRCULAR, PORT_TYPE_SLOT,
 )
 from ..core.driver_model import DriverModel
 from ..database.db_manager import (
@@ -210,13 +216,27 @@ class DriverPickerDialog(QDialog):
         return self._selected_driver
 
 
-# ─── Pannello input principale ────────────────────────────────────────────────
+# ─── Pannello input principale (nuovo layout mockup) ─────────────────────────
 
 class InputPanel(QWidget):
     """
-    Pannello superiore sinistro.
-    Emette il segnale calculate_requested con tutti i parametri
-    che servono al motore di calcolo.
+    Pannello sinistro principale — layout conforme al mockup.
+
+    Sezioni (dall'alto):
+      [1] TIPO ENCLOSURE   : 3 pulsanti  TROMBA | REFLEX | MIXED-HYBRID
+      [2] VARIANTI         : combo varianti per categoria selezionata
+      [3] TIPO SPEAKER     : SUB / CD / FULLRANGE
+      [4] SELEZIONE DRIVER : combo + bottone browse
+      [5] PARAMETRI ACUSTICI
+            • Horn:   Fc, espansione, Sm/Sg, compressione, Hypex T
+            • Reflex: Fb tuning, volume camera
+            • Bandpass: volume cam. front/rear, freq range
+      [6] LIMITI DIMENSIONALI  : larghezza, altezza, profondità
+      [7] TIPO TROMBA / PORTA REFLEX
+            • Horn geometry: straight/folded/2folded
+            • Port type, diametro/slot
+      [8] NUMERO SEZIONI / PORTE
+      [CALCOLA]
     """
 
     calculate_requested = Signal(dict)   # dizionario con tutti i parametri
@@ -227,61 +247,109 @@ class InputPanel(QWidget):
         super().__init__(parent)
         initialize_database()
         self._selected_driver: DriverModel = None
+        self._selected_hf_driver: DriverModel = None   # secondo driver per FULLRANGE
+        self._enclosure_category = ENCLOSURE_CATEGORY_HORN
+        self._enclosure_type = ENCLOSURE_VARIANTS[ENCLOSURE_CATEGORY_HORN][0]
         self._build_ui()
 
-    # ── Utility: crea un separatore di sezione ────────────────────────────
+    # ── Utility ───────────────────────────────────────────────────────────────
+
     @staticmethod
     def _section_label(text: str) -> QLabel:
         lbl = QLabel(text)
         lbl.setStyleSheet(
             "color: #7C9EF0; font-size: 11px; font-weight: bold;"
-            "border-bottom: 1px solid #2A2A44; padding-bottom: 2px;"
+            "border-bottom: 1px solid #2A2A44; padding-bottom: 2px; margin-top: 4px;"
         )
         return lbl
 
+    @staticmethod
+    def _hsep() -> QFrame:
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setStyleSheet("color: #2A2A44;")
+        line.setFixedHeight(1)
+        return line
+
+    @staticmethod
+    def _group(title: str, layout: "QLayout") -> "QGroupBox":
+        gb = QGroupBox(title)
+        gb.setLayout(layout)
+        gb.setStyleSheet(
+            "QGroupBox { border: 1px solid #2A2A44; border-radius:3px;"
+            " margin-top: 6px; padding-top:10px; font-weight:bold; color:#A0A0C0; font-size:10px;}"
+            "QGroupBox::title { subcontrol-origin: margin; left:8px; }"
+        )
+        return gb
+
+    # ── Build UI ──────────────────────────────────────────────────────────────
+
     def _build_ui(self):
-        # Layout esterno: scroll + pulsante fisso in fondo
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # ── Area scorrevole ────────────────────────────────────────────────
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         outer.addWidget(scroll, 1)
 
-        # Widget interno allo scroll
         inner = QWidget()
-        grid = QGridLayout(inner)
-        grid.setContentsMargins(10, 10, 10, 6)
-        grid.setVerticalSpacing(5)
-        grid.setHorizontalSpacing(8)
-        grid.setColumnStretch(1, 1)   # colonna widget si espande
+        vbox = QVBoxLayout(inner)
+        vbox.setContentsMargins(10, 8, 10, 6)
+        vbox.setSpacing(4)
         scroll.setWidget(inner)
 
-        row = 0
+        # ══ [1] TIPO ENCLOSURE — 3 pulsanti toggle ════════════════════════
+        vbox.addWidget(self._section_label("TIPO SPEAKER"))
 
-        # ══ TIPO SPEAKER ══════════════════════════════════════════════════
-        grid.addWidget(self._section_label("TIPO SPEAKER"), row, 0, 1, 2)
-        row += 1
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(2)
+        self._encl_btn_group = QButtonGroup(self)
+        self._encl_btn_group.setExclusive(True)
+        self._encl_btns = {}
+        for cat in ENCLOSURE_CATEGORIES:
+            btn = QPushButton(ENCLOSURE_CATEGORY_LABELS[cat])
+            btn.setCheckable(True)
+            btn.setStyleSheet(
+                "QPushButton { background:#1E1E32; border:1px solid #2A2A44;"
+                " border-radius:3px; padding:4px 8px; color:#808090; font-size:10px;}"
+                "QPushButton:checked { background:#2A4A8A; border-color:#5A7ACA; color:#E0E8FF;}"
+                "QPushButton:hover { background:#2A2A44; }"
+            )
+            self._encl_btn_group.addButton(btn)
+            btn_row.addWidget(btn)
+            self._encl_btns[cat] = btn
+        self._encl_btns[ENCLOSURE_CATEGORY_HORN].setChecked(True)
+        self._encl_btn_group.buttonClicked.connect(self._on_category_changed)
+        vbox.addLayout(btn_row)
 
+        # ══ [2] VARIANTI ══════════════════════════════════════════════════
+        self.variant_combo = QComboBox()
+        self.variant_combo.currentIndexChanged.connect(self._on_variant_changed)
+        vbox.addWidget(self.variant_combo)
+
+        vbox.addWidget(self._hsep())
+
+        # ══ [3] TIPO SPEAKER (SUB / CD / FULLRANGE) ══════════════════════
+        vbox.addWidget(self._section_label("TIPO DRIVER"))
         self.type_combo = QComboBox()
         self.type_combo.addItem("Subwoofer (SUB)", SPEAKER_TYPE_SUB)
         self.type_combo.addItem("Compression Driver (CD)", SPEAKER_TYPE_CD)
         self.type_combo.addItem("Fullrange (CD+SUB)", SPEAKER_TYPE_FULLRANGE)
         self.type_combo.currentIndexChanged.connect(self._on_type_changed)
-        grid.addWidget(self.type_combo, row, 0, 1, 2)
-        row += 1
+        vbox.addWidget(self.type_combo)
 
-        grid.addWidget(self._hsep(), row, 0, 1, 2)
-        row += 1
+        vbox.addWidget(self._hsep())
 
-        # ══ DRIVER ════════════════════════════════════════════════════════
-        grid.addWidget(self._section_label("DRIVER"), row, 0, 1, 2)
-        row += 1
+        # ══ [4] SELEZIONE DRIVER ═════════════════════════════════════════
+        vbox.addWidget(self._section_label("SELEZIONE DRIVER"))
 
+        driver_row_w = QWidget()
+        driver_row_l = QHBoxLayout(driver_row_w)
+        driver_row_l.setContentsMargins(0, 0, 0, 0)
+        driver_row_l.setSpacing(4)
         self.driver_combo = QComboBox()
         self.driver_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.driver_combo.currentIndexChanged.connect(self._on_driver_combo_changed)
@@ -289,182 +357,368 @@ class InputPanel(QWidget):
         browse_btn.setFixedWidth(32)
         browse_btn.setToolTip("Selettore driver completo con parametri T&S")
         browse_btn.clicked.connect(self._open_driver_picker)
-        driver_row_w = QWidget()
-        driver_row_l = QHBoxLayout(driver_row_w)
-        driver_row_l.setContentsMargins(0, 0, 0, 0)
-        driver_row_l.setSpacing(4)
         driver_row_l.addWidget(self.driver_combo, 1)
         driver_row_l.addWidget(browse_btn)
-        grid.addWidget(driver_row_w, row, 0, 1, 2)
-        row += 1
+        vbox.addWidget(driver_row_w)
 
         self.driver_info_label = QLabel("Nessun driver selezionato")
         self.driver_info_label.setStyleSheet("color: #707090; font-size: 11px;")
         self.driver_info_label.setWordWrap(True)
-        grid.addWidget(self.driver_info_label, row, 0, 1, 2)
-        row += 1
+        vbox.addWidget(self.driver_info_label)
 
-        grid.addWidget(self._hsep(), row, 0, 1, 2)
-        row += 1
+        vbox.addWidget(self._hsep())
 
-        # ══ PARAMETRI TROMBA ══════════════════════════════════════════════
-        grid.addWidget(self._section_label("PARAMETRI TROMBA"), row, 0, 1, 2)
-        row += 1
+        # ══ [5a] PARAMETRI TROMBA (QGroupBox, visibile solo per horn) ════
+        horn_param_layout = QGridLayout()
+        horn_param_layout.setVerticalSpacing(4)
+        horn_param_layout.setHorizontalSpacing(8)
+        horn_param_layout.setColumnStretch(1, 1)
 
-        grid.addWidget(QLabel("Fc taglio:"), row, 0)
+        r = 0
+        horn_param_layout.addWidget(QLabel("Fc taglio:"), r, 0)
         self.fc_spin = QDoubleSpinBox()
         self.fc_spin.setRange(10, 2000)
         self.fc_spin.setValue(70.0)
         self.fc_spin.setSuffix(" Hz")
         self.fc_spin.setDecimals(1)
-        self.fc_spin.setToolTip(
-            "Frequenza di taglio -3dB della tromba.\n"
-            "Nel foglio Excel originale: 70 Hz (bass horn).\n"
-            "Determina il flare rate: m = 4\u03c0 \u00b7 Fc / c."
-        )
-        grid.addWidget(self.fc_spin, row, 1)
-        row += 1
+        self.fc_spin.setToolTip("Frequenza di taglio –3dB della tromba.\nm = 4π·Fc/c  (Webster 1919)")
+        horn_param_layout.addWidget(self.fc_spin, r, 1); r += 1
 
-        grid.addWidget(QLabel("Espansione:"), row, 0)
+        horn_param_layout.addWidget(QLabel("Espansione:"), r, 0)
         self.expansion_combo = QComboBox()
         for exp_type in EXPANSION_TYPES:
             self.expansion_combo.addItem(EXPANSION_LABELS[exp_type], exp_type)
-        self.expansion_combo.setToolTip(
-            "Tipo di espansione del profilo della tromba.\n"
-            "Esponenziale: S(x) = S\u2080 \u00b7 e^(m\u00b7x) \u2014 il tipo pi\u00f9 usato per sub.\n"
-            "Conical: espansione lineare.\n"
-            "Tractrix: bocca fissa da Fc (Klipsch 1941).\n"
-            "Hypex: ibrido cosh\u00b2/esponenziale, param T selezionabile (Salmon 1946)."
-        )
         self.expansion_combo.currentIndexChanged.connect(self._on_expansion_changed)
-        grid.addWidget(self.expansion_combo, row, 1)
-        row += 1
+        horn_param_layout.addWidget(self.expansion_combo, r, 1); r += 1
 
-        # ── Parametro Hypex T (visibile solo con Hypex) ────────────────────────
         self._hypex_t_label = QLabel("Hypex T:")
         self._hypex_t_spin = QDoubleSpinBox()
         self._hypex_t_spin.setRange(0.0, 0.99)
         self._hypex_t_spin.setValue(0.5)
         self._hypex_t_spin.setSingleStep(0.05)
         self._hypex_t_spin.setDecimals(2)
-        self._hypex_t_spin.setToolTip(
-            "Parametro di forma T per profilo Hypex (Salmon 1946, JASA 17:212).\n"
-            "T = 0.00 \u2192 cosh\u00b2 horn (minore distorsione vicino a Fc)\n"
-            "T = 0.50 \u2192 Hypex classico (ottimo compromesso)\n"
-            "T \u2192 1.00 \u2192 approssima profilo esponenziale\n"
-            "Range: [0, 1) \u2014 valori vicini a 1 rendono la tromba pi\u00f9 lunga."
-        )
-        grid.addWidget(self._hypex_t_label, row, 0)
-        grid.addWidget(self._hypex_t_spin, row, 1)
+        self._hypex_t_spin.setToolTip("T=0 → cosh² horn, T=0.5 → Hypex, T→1 → esponenziale  (Salmon 1946)")
+        horn_param_layout.addWidget(self._hypex_t_label, r, 0)
+        horn_param_layout.addWidget(self._hypex_t_spin, r, 1)
         self._hypex_t_label.setVisible(False)
         self._hypex_t_spin.setVisible(False)
-        row += 1
+        r += 1
 
-        grid.addWidget(QLabel("Sm/Sg ratio:"), row, 0)
+        horn_param_layout.addWidget(QLabel("Sm/Sg ratio:"), r, 0)
         self.ratio_spin = QDoubleSpinBox()
         self.ratio_spin.setRange(1.1, 200.0)
         self.ratio_spin.setValue(2.0)
         self.ratio_spin.setDecimals(2)
-        self.ratio_spin.setToolTip(
-            "Rapporto area bocca / area gola (Smouth / Sthroat).\n"
-            "Nel foglio Excel originale: 2.0 (relativo a Sd del driver).\n"
-            "Valori maggiori \u2192 tromba pi\u00f9 lunga ma risposta pi\u00f9 estesa in frequenza."
-        )
-        grid.addWidget(self.ratio_spin, row, 1)
-        row += 1
+        horn_param_layout.addWidget(self.ratio_spin, r, 1); r += 1
 
-        grid.addWidget(QLabel("Compressione:"), row, 0)
+        horn_param_layout.addWidget(QLabel("Compressione:"), r, 0)
         self.compression_spin = QDoubleSpinBox()
         self.compression_spin.setRange(1.0, 50.0)
         self.compression_spin.setValue(1.0)
         self.compression_spin.setDecimals(1)
-        self.compression_spin.setToolTip(
-            "Rapporto di compressione alla gola: Sd_driver / S_gola.\n"
-            "1.0 = nessuna compressione (tipico per subwoofer).\n"
-            "3\u201310 = compression driver (alta pressione alla gola)."
-        )
-        grid.addWidget(self.compression_spin, row, 1)
-        row += 1
+        self.compression_spin.setToolTip("Sd_driver / S_gola.  1.0 = sub  |  3–10 = compression driver")
+        horn_param_layout.addWidget(self.compression_spin, r, 1); r += 1
 
-        grid.addWidget(QLabel("N. sezioni:"), row, 0)
-        self.n_sections_spin = QSpinBox()
-        self.n_sections_spin.setRange(4, 50)
-        self.n_sections_spin.setValue(8)
-        self.n_sections_spin.setToolTip(
-            "Numero di sezioni esponenziali del profilo della tromba.\n"
-            "Nel foglio Excel originale: 8 sezioni (L1\u2013L8).\n"
-            "Pi\u00f9 sezioni \u2192 profilo pi\u00f9 preciso e visualizzazione 2D pi\u00f9 dettagliata."
-        )
-        grid.addWidget(self.n_sections_spin, row, 1)
-        row += 1
+        self.gb_horn_params = self._group("PARAMETRI TROMBA", horn_param_layout)
+        vbox.addWidget(self.gb_horn_params)
 
-        grid.addWidget(self._hsep(), row, 0, 1, 2)
-        row += 1
+        # ══ [5b] PARAMETRI REFLEX ════════════════════════════════════════
+        reflex_param_layout = QGridLayout()
+        reflex_param_layout.setVerticalSpacing(4)
+        reflex_param_layout.setHorizontalSpacing(8)
+        reflex_param_layout.setColumnStretch(1, 1)
 
-        # ══ DIMENSIONI BOCCA / TROMBA ═════════════════════════════════════
-        grid.addWidget(self._section_label("DIMENSIONI BOCCA / TROMBA  (0 = libero)"), row, 0, 1, 2)
-        row += 1
+        r = 0
+        reflex_param_layout.addWidget(QLabel("Fb accordo:"), r, 0)
+        self.fb_spin = QDoubleSpinBox()
+        self.fb_spin.setRange(10, 300)
+        self.fb_spin.setValue(40.0)
+        self.fb_spin.setSuffix(" Hz")
+        self.fb_spin.setDecimals(1)
+        self.fb_spin.setToolTip("Frequenza di accordo della porta reflex (Helmholtz).\nSmall (1973) JAES 21(6)")
+        reflex_param_layout.addWidget(self.fb_spin, r, 1); r += 1
 
-        grid.addWidget(QLabel("Larghezza bocca:"), row, 0)
+        reflex_param_layout.addWidget(QLabel("Volume box:"), r, 0)
+        self.vbox_spin = QDoubleSpinBox()
+        self.vbox_spin.setRange(1, 2000)
+        self.vbox_spin.setValue(100.0)
+        self.vbox_spin.setSuffix(" L")
+        self.vbox_spin.setDecimals(1)
+        self.vbox_spin.setToolTip("Volume interno dell'enclosure (litri). 0 = calcolo automatico.")
+        reflex_param_layout.addWidget(self.vbox_spin, r, 1); r += 1
+
+        self.gb_reflex_params = self._group("PARAMETRI REFLEX", reflex_param_layout)
+        vbox.addWidget(self.gb_reflex_params)
+
+        # ══ [5c] PARAMETRI BANDPASS ══════════════════════════════════════
+        bp_param_layout = QGridLayout()
+        bp_param_layout.setVerticalSpacing(4)
+        bp_param_layout.setHorizontalSpacing(8)
+        bp_param_layout.setColumnStretch(1, 1)
+
+        r = 0
+        bp_param_layout.addWidget(QLabel("Vol. cam. rear:"), r, 0)
+        self.vb_rear_spin = QDoubleSpinBox()
+        self.vb_rear_spin.setRange(1, 2000)
+        self.vb_rear_spin.setValue(80.0)
+        self.vb_rear_spin.setSuffix(" L")
+        self.vb_rear_spin.setDecimals(1)
+        bp_param_layout.addWidget(self.vb_rear_spin, r, 1); r += 1
+
+        bp_param_layout.addWidget(QLabel("Freq. passabanda:"), r, 0)
+        freq_range_w = QWidget()
+        freq_range_l = QHBoxLayout(freq_range_w)
+        freq_range_l.setContentsMargins(0, 0, 0, 0)
+        freq_range_l.setSpacing(4)
+        self.f_low_spin = QDoubleSpinBox()
+        self.f_low_spin.setRange(10, 500)
+        self.f_low_spin.setValue(40.0)
+        self.f_low_spin.setSuffix(" Hz")
+        self.f_low_spin.setDecimals(0)
+        self.f_high_spin = QDoubleSpinBox()
+        self.f_high_spin.setRange(20, 2000)
+        self.f_high_spin.setValue(120.0)
+        self.f_high_spin.setSuffix(" Hz")
+        self.f_high_spin.setDecimals(0)
+        freq_range_l.addWidget(self.f_low_spin)
+        freq_range_l.addWidget(QLabel("–"))
+        freq_range_l.addWidget(self.f_high_spin)
+        bp_param_layout.addWidget(freq_range_w, r, 1); r += 1
+
+        self.gb_bp_params = self._group("PARAMETRI BANDPASS", bp_param_layout)
+        vbox.addWidget(self.gb_bp_params)
+
+        vbox.addWidget(self._hsep())
+
+        # ══ [6] LIMITI DIMENSIONALI ═══════════════════════════════════════
+        dim_layout = QGridLayout()
+        dim_layout.setVerticalSpacing(4)
+        dim_layout.setHorizontalSpacing(8)
+        dim_layout.setColumnStretch(1, 1)
+
+        r = 0
+        dim_layout.addWidget(QLabel("Larghezza max:"), r, 0)
         self.max_width_spin = QDoubleSpinBox()
         self.max_width_spin.setRange(0, 5000)
         self.max_width_spin.setValue(0)
         self.max_width_spin.setSuffix(" mm")
-        self.max_width_spin.setToolTip("Larghezza massima della bocca (mm). 0 = nessun limite.")
-        grid.addWidget(self.max_width_spin, row, 1)
-        row += 1
+        self.max_width_spin.setToolTip("0 = nessun limite")
+        dim_layout.addWidget(self.max_width_spin, r, 1); r += 1
 
-        grid.addWidget(QLabel("Altezza bocca:"), row, 0)
+        dim_layout.addWidget(QLabel("Altezza max:"), r, 0)
         self.max_height_spin = QDoubleSpinBox()
         self.max_height_spin.setRange(0, 5000)
         self.max_height_spin.setValue(0)
         self.max_height_spin.setSuffix(" mm")
-        self.max_height_spin.setToolTip("Altezza massima della bocca (mm). 0 = nessun limite.")
-        grid.addWidget(self.max_height_spin, row, 1)
-        row += 1
+        dim_layout.addWidget(self.max_height_spin, r, 1); r += 1
 
-        grid.addWidget(QLabel("Lunghezza tromba:"), row, 0)
+        dim_layout.addWidget(QLabel("Profondità max:"), r, 0)
         self.max_length_spin = QDoubleSpinBox()
         self.max_length_spin.setRange(0, 5000)
         self.max_length_spin.setValue(0)
         self.max_length_spin.setSuffix(" mm")
-        self.max_length_spin.setToolTip(
-            "Lunghezza massima della tromba / profondit\u00e0 cabinet (mm).\n"
-            "Per tromba dritta coincide con la profondit\u00e0 del cabinet.\n"
-            "0 = nessun limite."
-        )
-        grid.addWidget(self.max_length_spin, row, 1)
-        row += 1
+        dim_layout.addWidget(self.max_length_spin, r, 1); r += 1
 
-        # Spazio finale nello scroll
-        grid.setRowStretch(row, 1)
+        self.gb_limits = self._group("LIMITI DIMENSIONALI", dim_layout)
+        vbox.addWidget(self.gb_limits)
 
-        # ── Geometria cabinet (fra scroll e pulsante Calcola) ──────────────
-        geom_row = QWidget()
-        geom_grid = QGridLayout(geom_row)
-        geom_grid.setContentsMargins(10, 4, 10, 2)
-        geom_grid.setVerticalSpacing(4)
-        geom_grid.setHorizontalSpacing(8)
-        geom_grid.setColumnStretch(1, 1)
-        geom_grid.addWidget(self._section_label("GEOMETRIA CABINET"), 0, 0, 1, 2)
-        geom_grid.addWidget(QLabel("Geometria:"), 1, 0)
+        vbox.addWidget(self._hsep())
+
+        # ══ [7] TIPO TROMBA / TIPO PORTA REFLEX ══════════════════════════
+        # ── Horn geometry (visibile solo per horn) ────────────────────────
+        horn_type_layout = QGridLayout()
+        horn_type_layout.setVerticalSpacing(4)
+        horn_type_layout.setHorizontalSpacing(8)
+        horn_type_layout.setColumnStretch(1, 1)
+
+        horn_type_layout.addWidget(QLabel("Geometria:"), 0, 0)
         self.geometry_combo = QComboBox()
         for g in GEOMETRY_TYPES:
             self.geometry_combo.addItem(GEOMETRY_LABELS[g], g)
         self.geometry_combo.setToolTip(
-            "Tipo di piegatura della tromba nel cabinet.\n"
-            "Dritta: massima fedelt\u00e0, cabinet profondo.\n"
-            "Folded (U): profondit\u00e0 dimezzata con 1 piega.\n"
+            "Dritta: cabinet profondo, massima fedeltà.\n"
+            "Folded: profondità dimezzata con 1 piega.\n"
             "2-Folded: massima compattezza con 2 pieghe."
         )
         self.geometry_combo.currentIndexChanged.connect(
             lambda: self.geometry_changed.emit(self.geometry_combo.currentData())
         )
-        geom_grid.addWidget(self.geometry_combo, 1, 1)
-        outer.addWidget(geom_row)
+        horn_type_layout.addWidget(self.geometry_combo, 0, 1)
+        self.gb_horn_type = self._group("TIPO TROMBA", horn_type_layout)
+        vbox.addWidget(self.gb_horn_type)
 
-        # ── Pulsante Calcola fisso in fondo (fuori dallo scroll) ───────────
-        self.calc_btn = QPushButton("\u2699  Calcola")
+        # ── Reflex port settings (visibile solo per reflex) ───────────────
+        port_layout = QGridLayout()
+        port_layout.setVerticalSpacing(4)
+        port_layout.setHorizontalSpacing(8)
+        port_layout.setColumnStretch(1, 1)
+
+        r = 0
+        port_layout.addWidget(QLabel("Tipo porta:"), r, 0)
+        self.port_type_combo = QComboBox()
+        for pt in PORT_TYPES:
+            self.port_type_combo.addItem(PORT_TYPE_LABELS[pt], pt)
+        self.port_type_combo.currentIndexChanged.connect(self._on_port_type_changed)
+        port_layout.addWidget(self.port_type_combo, r, 1); r += 1
+
+        self._port_diam_label = QLabel("Diametro porta:")
+        self.port_diam_spin = QDoubleSpinBox()
+        self.port_diam_spin.setRange(20, 500)
+        self.port_diam_spin.setValue(100.0)
+        self.port_diam_spin.setSuffix(" mm")
+        port_layout.addWidget(self._port_diam_label, r, 0)
+        port_layout.addWidget(self.port_diam_spin, r, 1); r += 1
+
+        self._slot_labels = []
+        self._slot_w_label = QLabel("Slot larghezza:")
+        self.slot_w_spin = QDoubleSpinBox()
+        self.slot_w_spin.setRange(20, 1000)
+        self.slot_w_spin.setValue(200.0)
+        self.slot_w_spin.setSuffix(" mm")
+        self._slot_h_label = QLabel("Slot altezza:")
+        self.slot_h_spin = QDoubleSpinBox()
+        self.slot_h_spin.setRange(10, 500)
+        self.slot_h_spin.setValue(50.0)
+        self.slot_h_spin.setSuffix(" mm")
+        port_layout.addWidget(self._slot_w_label, r, 0)
+        port_layout.addWidget(self.slot_w_spin, r, 1); r += 1
+        port_layout.addWidget(self._slot_h_label, r, 0)
+        port_layout.addWidget(self.slot_h_spin, r, 1); r += 1
+        self._slot_w_label.setVisible(False)
+        self.slot_w_spin.setVisible(False)
+        self._slot_h_label.setVisible(False)
+        self.slot_h_spin.setVisible(False)
+
+        self.gb_port_type = self._group("TIPO PORTA REFLEX", port_layout)
+        vbox.addWidget(self.gb_port_type)
+
+        vbox.addWidget(self._hsep())
+
+        # ══ [8] N. SEZIONI TROMBA / N. PORTE REFLEX ══════════════════════
+        counts_layout = QGridLayout()
+        counts_layout.setVerticalSpacing(4)
+        counts_layout.setHorizontalSpacing(8)
+        counts_layout.setColumnStretch(1, 1)
+
+        r = 0
+        self._n_sect_label = QLabel("N. sezioni tromba:")
+        self.n_sections_spin = QSpinBox()
+        self.n_sections_spin.setRange(4, 50)
+        self.n_sections_spin.setValue(8)
+        self.n_sections_spin.setToolTip("Sezioni del profilo tromba (4–50). Originale Excel: 8.")
+        counts_layout.addWidget(self._n_sect_label, r, 0)
+        counts_layout.addWidget(self.n_sections_spin, r, 1); r += 1
+
+        self._n_ports_label = QLabel("N. porte reflex:")
+        self.n_ports_spin = QSpinBox()
+        self.n_ports_spin.setRange(1, 8)
+        self.n_ports_spin.setValue(1)
+        counts_layout.addWidget(self._n_ports_label, r, 0)
+        counts_layout.addWidget(self.n_ports_spin, r, 1)
+
+        self.gb_counts = self._group("NUMERO SEZIONI / PORTE", counts_layout)
+        vbox.addWidget(self.gb_counts)
+
+        # ══ [9] FULLRANGE — driver HF + crossover (visibile solo FULLRANGE) ═
+        fr_layout = QGridLayout()
+        fr_layout.setVerticalSpacing(4)
+        fr_layout.setHorizontalSpacing(8)
+        fr_layout.setColumnStretch(1, 1)
+
+        r = 0
+        fr_layout.addWidget(QLabel("Driver HF (CD):"), r, 0)
+        hf_row_w = QWidget()
+        hf_row_l = QHBoxLayout(hf_row_w)
+        hf_row_l.setContentsMargins(0, 0, 0, 0)
+        hf_row_l.setSpacing(4)
+        self.hf_combo = QComboBox()
+        self.hf_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.hf_combo.currentIndexChanged.connect(self._on_hf_combo_changed)
+        hf_browse_btn = QPushButton("...")
+        hf_browse_btn.setFixedWidth(32)
+        hf_browse_btn.setToolTip("Selettore driver HF (compression driver)")
+        hf_browse_btn.clicked.connect(self._open_hf_driver_picker)
+        hf_row_l.addWidget(self.hf_combo, 1)
+        hf_row_l.addWidget(hf_browse_btn)
+        fr_layout.addWidget(hf_row_w, r, 1)
+        r += 1
+
+        self.hf_info_label = QLabel("Nessun driver HF selezionato")
+        self.hf_info_label.setStyleSheet("color: #707090; font-size: 11px;")
+        self.hf_info_label.setWordWrap(True)
+        fr_layout.addWidget(self.hf_info_label, r, 0, 1, 2)
+        r += 1
+
+        fr_layout.addWidget(QLabel("Fc HF taglio:"), r, 0)
+        self.hf_fc_spin = QDoubleSpinBox()
+        self.hf_fc_spin.setRange(100, 5000)
+        self.hf_fc_spin.setValue(700.0)
+        self.hf_fc_spin.setSuffix(" Hz")
+        self.hf_fc_spin.setDecimals(0)
+        self.hf_fc_spin.setToolTip("Frequenza di taglio -3dB della tromba HF")
+        fr_layout.addWidget(self.hf_fc_spin, r, 1)
+        r += 1
+
+        fr_layout.addWidget(QLabel("Sm/Sg HF:"), r, 0)
+        self.hf_ratio_spin = QDoubleSpinBox()
+        self.hf_ratio_spin.setRange(1.1, 100.0)
+        self.hf_ratio_spin.setValue(5.0)
+        self.hf_ratio_spin.setDecimals(1)
+        fr_layout.addWidget(self.hf_ratio_spin, r, 1)
+        r += 1
+
+        fr_layout.addWidget(QLabel("Compressione HF:"), r, 0)
+        self.hf_compression_spin = QDoubleSpinBox()
+        self.hf_compression_spin.setRange(1.0, 50.0)
+        self.hf_compression_spin.setValue(10.0)
+        self.hf_compression_spin.setDecimals(1)
+        self.hf_compression_spin.setToolTip("Tipicamente 4–16x per compression driver")
+        fr_layout.addWidget(self.hf_compression_spin, r, 1)
+        r += 1
+
+        fr_layout.addWidget(self._hsep(), r, 0, 1, 2)
+        r += 1
+
+        fr_layout.addWidget(QLabel("Crossover:"), r, 0)
+        self.xover_spin = QDoubleSpinBox()
+        self.xover_spin.setRange(100, 5000)
+        self.xover_spin.setValue(700.0)
+        self.xover_spin.setSuffix(" Hz")
+        self.xover_spin.setDecimals(0)
+        self.xover_spin.setToolTip("Frequenza di crossover tra LF e HF")
+        fr_layout.addWidget(self.xover_spin, r, 1)
+        r += 1
+
+        fr_layout.addWidget(QLabel("Pendenza:"), r, 0)
+        self.xover_slope_combo = QComboBox()
+        for label, val in [("12 dB/ott", 12), ("18 dB/ott", 18),
+                           ("24 dB/ott", 24), ("48 dB/ott", 48)]:
+            self.xover_slope_combo.addItem(label, val)
+        self.xover_slope_combo.setCurrentIndex(2)   # 24 dB/ott default
+        fr_layout.addWidget(self.xover_slope_combo, r, 1)
+        r += 1
+
+        fr_layout.addWidget(QLabel("Tipo crossover:"), r, 0)
+        self.xover_type_combo = QComboBox()
+        for label, val in [("Linkwitz-Riley", "linkwitz_riley"),
+                           ("Butterworth", "butterworth"),
+                           ("Bessel", "bessel")]:
+            self.xover_type_combo.addItem(label, val)
+        fr_layout.addWidget(self.xover_type_combo, r, 1)
+
+        self.gb_fullrange = self._group("FULLRANGE: DRIVER HF + CROSSOVER", fr_layout)
+        vbox.addWidget(self.gb_fullrange)
+
+        # Spacer finale nello scroll
+        vbox.addStretch(1)
+
+        # ── Geometria cabinet (fr scroll e pulsante Calcola) ─────────────
+        geom_row = QWidget()
+        geom_grid = QGridLayout(geom_row)
+        geom_grid.setContentsMargins(10, 4, 10, 2)
+
+        # ── Pulsante Calcola fisso in fondo ───────────────────────────────
+        self.calc_btn = QPushButton("⚙  Calcola")
         self.calc_btn.setMinimumHeight(42)
         font = QFont()
         font.setPointSize(11)
@@ -479,50 +733,112 @@ class InputPanel(QWidget):
         self.calc_btn.clicked.connect(self._on_calculate)
         outer.addWidget(self.calc_btn)
 
-        # Carica driver iniziali (SUB di default)
+        # ── Popolamento iniziale ──────────────────────────────────────────
+        self._refresh_variant_combo()
+        self._update_section_visibility()
         self._reload_driver_combo(SPEAKER_TYPE_SUB)
-
-    @staticmethod
-    def _hsep() -> QFrame:
-        """Separatore orizzontale sottile."""
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setStyleSheet("color: #2A2A44;")
-        line.setFixedHeight(1)
-        return line
 
     # ── Slot interni ──────────────────────────────────────────────────────────
 
+    def _on_category_changed(self, btn):
+        """Cambio categoria enclosure (TROMBA / REFLEX / HYBRID)."""
+        for cat, b in self._encl_btns.items():
+            if b is btn:
+                self._enclosure_category = cat
+                break
+        self._refresh_variant_combo()
+        self._update_section_visibility()
+
+    def _refresh_variant_combo(self):
+        """Aggiorna il combo varianti in base alla categoria selezionata."""
+        self.variant_combo.blockSignals(True)
+        self.variant_combo.clear()
+        for v in ENCLOSURE_VARIANTS[self._enclosure_category]:
+            self.variant_combo.addItem(ENCLOSURE_LABELS[v], v)
+        self.variant_combo.blockSignals(False)
+        self.variant_combo.setCurrentIndex(0)
+        self._on_variant_changed()
+
+    def _on_variant_changed(self):
+        """Cambio variante (es. Horn → Reflex → Bandpass_4)."""
+        v = self.variant_combo.currentData()
+        if v:
+            self._enclosure_type = v
+        self._update_section_visibility()
+        # Aggiorna Fc default all'accordo con il tipo di enclosure
+        if self._enclosure_type in ENCLOSURE_HAS_HORN:
+            if self.type_combo.currentData() == SPEAKER_TYPE_SUB:
+                self.fc_spin.setValue(70.0)
+
+    def _update_section_visibility(self):
+        """Mostra/nasconde i GroupBox in base al tipo di enclosure selezionato."""
+        enc = self._enclosure_type
+        has_horn   = enc in ENCLOSURE_HAS_HORN
+        has_reflex = enc in ENCLOSURE_HAS_REFLEX
+        is_bp      = enc in ENCLOSURE_IS_BANDPASS
+
+        self.gb_horn_params.setVisible(has_horn)
+        self.gb_horn_type.setVisible(has_horn)
+        self._n_sect_label.setVisible(has_horn)
+        self.n_sections_spin.setVisible(has_horn)
+
+        self.gb_reflex_params.setVisible(has_reflex and not is_bp)
+        self.gb_bp_params.setVisible(is_bp)
+        self.gb_port_type.setVisible(has_reflex)
+        self._n_ports_label.setVisible(has_reflex)
+        self.n_ports_spin.setVisible(has_reflex)
+
+        # Fullrange: visibile solo quando speaker_type == FULLRANGE
+        is_fullrange = (self.type_combo.currentData() == SPEAKER_TYPE_FULLRANGE)
+        self.gb_fullrange.setVisible(is_fullrange)
+        if is_fullrange and not self.hf_combo.count():
+            self._reload_hf_combo()
+
     def _on_type_changed(self):
+        """Cambio tipo speaker (SUB / CD / FULLRANGE)."""
         speaker_type = self.type_combo.currentData()
-        # Imposta Fc default e compressione gola per tipo
         if speaker_type == SPEAKER_TYPE_CD:
             self.fc_spin.setValue(500.0)
             self.compression_spin.setValue(4.0)
         elif speaker_type == SPEAKER_TYPE_SUB:
             self.fc_spin.setValue(70.0)
             self.compression_spin.setValue(1.0)
+        elif speaker_type == SPEAKER_TYPE_FULLRANGE:
+            self.fc_spin.setValue(50.0)          # LF cutoff
+            self.compression_spin.setValue(1.0)
+            self._reload_hf_combo()
         else:
             self.fc_spin.setValue(100.0)
             self.compression_spin.setValue(1.0)
         self._reload_driver_combo(speaker_type)
+        self._update_section_visibility()
 
     def _on_expansion_changed(self):
-        """Mostra/nasconde il campo Hypex T in base al tipo di espansione."""
+        """Mostra/nasconde Hypex T."""
         is_hypex = (self.expansion_combo.currentData() == EXPANSION_HYPEX)
         self._hypex_t_label.setVisible(is_hypex)
         self._hypex_t_spin.setVisible(is_hypex)
 
+    def _on_port_type_changed(self):
+        """Mostra campo diametro o dimensioni slot."""
+        pt = self.port_type_combo.currentData()
+        is_circ = (pt == PORT_TYPE_CIRCULAR)
+        is_slot = (pt == PORT_TYPE_SLOT)
+        self._port_diam_label.setVisible(is_circ)
+        self.port_diam_spin.setVisible(is_circ)
+        self._slot_w_label.setVisible(is_slot)
+        self.slot_w_spin.setVisible(is_slot)
+        self._slot_h_label.setVisible(is_slot)
+        self.slot_h_spin.setVisible(is_slot)
+
     def _reload_driver_combo(self, speaker_type: str):
-        """Ricarica il combo driver filtrato per tipo speaker."""
         type_map = {
             SPEAKER_TYPE_SUB: "subwoofer",
             SPEAKER_TYPE_CD: "compression_driver",
-            SPEAKER_TYPE_FULLRANGE: None,
+            SPEAKER_TYPE_FULLRANGE: "subwoofer",   # LF section = subwoofer
         }
         db_type = type_map.get(speaker_type)
         drivers = get_drivers_by_type(db_type)
-
         self.driver_combo.blockSignals(True)
         self.driver_combo.clear()
         self.driver_combo.addItem("-- Seleziona driver --", None)
@@ -540,17 +856,15 @@ class InputPanel(QWidget):
             self._set_driver(driver)
 
     def _open_driver_picker(self):
-        """Apre il dialogo di selezione avanzata con dettagli T&S completi."""
         type_map = {
             SPEAKER_TYPE_SUB: "subwoofer",
             SPEAKER_TYPE_CD: "compression_driver",
-            SPEAKER_TYPE_FULLRANGE: None,
+            SPEAKER_TYPE_FULLRANGE: "subwoofer",  # LF driver per fullrange
         }
         filter_type = type_map.get(self.type_combo.currentData())
         dlg = DriverPickerDialog(self, filter_type=filter_type)
         if dlg.exec_() == QDialog.Accepted and dlg.selected_driver:
             self._set_driver(dlg.selected_driver)
-            # Sincronizza il combo sulla voce corrispondente se esiste
             for i in range(self.driver_combo.count()):
                 d = self.driver_combo.itemData(i)
                 if isinstance(d, DriverModel) and d.model == dlg.selected_driver.model:
@@ -568,20 +882,67 @@ class InputPanel(QWidget):
         )
         self.driver_changed.emit(driver)
 
+    # ── HF driver (Fullrange) ─────────────────────────────────────────────────
+
+    def _reload_hf_combo(self):
+        """Popola il combo del driver HF con compression driver."""
+        drivers = get_drivers_by_type("compression_driver")
+        self.hf_combo.blockSignals(True)
+        self.hf_combo.clear()
+        self.hf_combo.addItem("-- Seleziona CD HF --", None)
+        for d in drivers:
+            label = f"{d.manufacturer}  {d.model}  ({d.diameter_inch}\" / {d.power_rms:.0f}W)"
+            self.hf_combo.addItem(label, d)
+        self.hf_combo.blockSignals(False)
+        self.hf_combo.setCurrentIndex(0)
+        self._selected_hf_driver = None
+        self.hf_info_label.setText("Nessun driver HF selezionato")
+
+    def _on_hf_combo_changed(self):
+        driver = self.hf_combo.currentData()
+        if isinstance(driver, DriverModel):
+            self._set_hf_driver(driver)
+
+    def _open_hf_driver_picker(self):
+        dlg = DriverPickerDialog(self, filter_type="compression_driver")
+        if dlg.exec_() == QDialog.Accepted and dlg.selected_driver:
+            self._set_hf_driver(dlg.selected_driver)
+            for i in range(self.hf_combo.count()):
+                d = self.hf_combo.itemData(i)
+                if isinstance(d, DriverModel) and d.model == dlg.selected_driver.model:
+                    self.hf_combo.blockSignals(True)
+                    self.hf_combo.setCurrentIndex(i)
+                    self.hf_combo.blockSignals(False)
+                    break
+
+    def _set_hf_driver(self, driver: DriverModel):
+        self._selected_hf_driver = driver
+        self.hf_info_label.setText(
+            f"<b>{driver.manufacturer} {driver.model}</b><br>"
+            f"Fs={driver.fs:.0f}Hz  Qts={driver.qts:.3f}  "
+            f"SPL={driver.spl_1w_1m:.1f}dB  {driver.power_rms:.0f}W"
+        )
+
     def _on_calculate(self):
+        speaker_type = self.type_combo.currentData()
         if self._selected_driver is None:
-            # Segnala al main window che manca il driver
             self.calculate_requested.emit({"error": "no_driver"})
+            return
+        if speaker_type == SPEAKER_TYPE_FULLRANGE and self._selected_hf_driver is None:
+            self.calculate_requested.emit({"error": "no_hf_driver"})
             return
         self.calculate_requested.emit(self.get_params())
 
     # ── API pubblica ──────────────────────────────────────────────────────────
 
     def get_params(self) -> dict:
-        """Restituisce un dizionario con tutti i parametri inseriti dall'utente."""
+        """Dizionario completo con tutti i parametri per il motore di calcolo."""
         return {
             "speaker_type":       self.type_combo.currentData(),
+            "enclosure_category": self._enclosure_category,
+            "enclosure_type":     self._enclosure_type,
             "driver":             self._selected_driver,
+            # ── Horn params ──
             "fc_hz":              self.fc_spin.value(),
             "expansion_type":     self.expansion_combo.currentData(),
             "hypex_T":            self._hypex_t_spin.value(),
@@ -589,6 +950,26 @@ class InputPanel(QWidget):
             "compression_ratio":  self.compression_spin.value(),
             "n_sections":         self.n_sections_spin.value(),
             "geometry_type":      self.geometry_combo.currentData(),
+            # ── Fullrange params ──
+            "hf_driver":          self._selected_hf_driver,
+            "hf_fc_hz":           self.hf_fc_spin.value(),
+            "hf_smouth_ratio":    self.hf_ratio_spin.value(),
+            "hf_compression_ratio": self.hf_compression_spin.value(),
+            "crossover_hz":       self.xover_spin.value(),
+            "crossover_slope":    self.xover_slope_combo.currentData(),
+            "crossover_type":     self.xover_type_combo.currentData(),
+            # ── Reflex params ──
+            "fb_hz":              self.fb_spin.value(),
+            "box_volume_l":       self.vbox_spin.value(),
+            "f_low_hz":           self.f_low_spin.value(),
+            "f_high_hz":          self.f_high_spin.value(),
+            "box_rear_volume_l":  self.vb_rear_spin.value(),
+            "port_type":          self.port_type_combo.currentData(),
+            "port_diameter_mm":   self.port_diam_spin.value(),
+            "port_slot_width_mm": self.slot_w_spin.value(),
+            "port_slot_height_mm":self.slot_h_spin.value(),
+            "n_ports":            self.n_ports_spin.value(),
+            # ── Dimensional limits ──
             "max_width_mm":       self.max_width_spin.value() or None,
             "max_height_mm":      self.max_height_spin.value() or None,
             "max_depth_mm":       self.max_length_spin.value() or None,
@@ -596,37 +977,85 @@ class InputPanel(QWidget):
 
     def set_params(self, params: dict):
         """Ricarica l'interfaccia da un dizionario (usato da Apri progetto)."""
+        if "enclosure_category" in params:
+            cat = params["enclosure_category"]
+            if cat in self._encl_btns:
+                self._encl_btns[cat].setChecked(True)
+                self._enclosure_category = cat
+                self._refresh_variant_combo()
+        if "enclosure_type" in params:
+            for i in range(self.variant_combo.count()):
+                if self.variant_combo.itemData(i) == params["enclosure_type"]:
+                    self.variant_combo.setCurrentIndex(i)
+                    break
         if "speaker_type" in params:
             for i in range(self.type_combo.count()):
                 if self.type_combo.itemData(i) == params["speaker_type"]:
                     self.type_combo.setCurrentIndex(i)
                     break
-        if "fc_hz" in params:
-            self.fc_spin.setValue(params["fc_hz"])
+        if "fc_hz" in params:       self.fc_spin.setValue(params["fc_hz"])
         if "expansion_type" in params:
             for i in range(self.expansion_combo.count()):
                 if self.expansion_combo.itemData(i) == params["expansion_type"]:
-                    self.expansion_combo.setCurrentIndex(i)
-                    break
-        if "hypex_T" in params:
-            self._hypex_t_spin.setValue(params["hypex_T"])
-        if "smouth_ratio" in params:
-            self.ratio_spin.setValue(params["smouth_ratio"])
-        if "compression_ratio" in params:
-            self.compression_spin.setValue(params["compression_ratio"])
-        if "n_sections" in params:
-            self.n_sections_spin.setValue(params["n_sections"])
+                    self.expansion_combo.setCurrentIndex(i); break
+        if "hypex_T" in params:     self._hypex_t_spin.setValue(params["hypex_T"])
+        if "smouth_ratio" in params: self.ratio_spin.setValue(params["smouth_ratio"])
+        if "compression_ratio" in params: self.compression_spin.setValue(params["compression_ratio"])
+        if "n_sections" in params:  self.n_sections_spin.setValue(params["n_sections"])
         if "geometry_type" in params:
             for i in range(self.geometry_combo.count()):
                 if self.geometry_combo.itemData(i) == params["geometry_type"]:
-                    self.geometry_combo.setCurrentIndex(i)
-                    break
+                    self.geometry_combo.setCurrentIndex(i); break
         if "max_width_mm" in params and params["max_width_mm"]:
             self.max_width_spin.setValue(params["max_width_mm"])
         if "max_height_mm" in params and params["max_height_mm"]:
             self.max_height_spin.setValue(params["max_height_mm"])
         if "max_depth_mm" in params and params["max_depth_mm"]:
             self.max_length_spin.setValue(params["max_depth_mm"])
+        # ── Reflex / Bandpass params ──────────────────────────────────────
+        if "fb_hz" in params:
+            self.fb_spin.setValue(params["fb_hz"])
+        if "box_volume_l" in params and params["box_volume_l"]:
+            self.vbox_spin.setValue(params["box_volume_l"])
+        if "f_low_hz" in params:
+            self.f_low_spin.setValue(params["f_low_hz"])
+        if "f_high_hz" in params:
+            self.f_high_spin.setValue(params["f_high_hz"])
+        if "box_rear_volume_l" in params and params["box_rear_volume_l"]:
+            self.vb_rear_spin.setValue(params["box_rear_volume_l"])
+        if "port_type" in params:
+            for i in range(self.port_type_combo.count()):
+                if self.port_type_combo.itemData(i) == params["port_type"]:
+                    self.port_type_combo.setCurrentIndex(i); break
+        if "port_diameter_mm" in params:
+            self.port_diam_spin.setValue(params["port_diameter_mm"])
+        if "port_slot_width_mm" in params:
+            self.slot_w_spin.setValue(params["port_slot_width_mm"])
+        if "port_slot_height_mm" in params:
+            self.slot_h_spin.setValue(params["port_slot_height_mm"])
+        if "n_ports" in params:
+            self.n_ports_spin.setValue(int(params["n_ports"]))
+        # ── Fullrange params ──────────────────────────────────────────────
+        if "hf_fc_hz" in params:
+            self.hf_fc_spin.setValue(params["hf_fc_hz"])
+        if "hf_smouth_ratio" in params:
+            self.hf_ratio_spin.setValue(params["hf_smouth_ratio"])
+        if "hf_compression_ratio" in params:
+            self.hf_compression_spin.setValue(params["hf_compression_ratio"])
+        if "crossover_hz" in params:
+            self.xover_spin.setValue(params["crossover_hz"])
+        if "crossover_slope" in params:
+            for i in range(self.xover_slope_combo.count()):
+                if self.xover_slope_combo.itemData(i) == params["crossover_slope"]:
+                    self.xover_slope_combo.setCurrentIndex(i); break
+        if "crossover_type" in params:
+            for i in range(self.xover_type_combo.count()):
+                if self.xover_type_combo.itemData(i) == params["crossover_type"]:
+                    self.xover_type_combo.setCurrentIndex(i); break
+        if "hf_driver_model" in params:
+            d = get_driver_by_model(params["hf_driver_model"])
+            if d:
+                self._set_hf_driver(d)
         if "driver_model" in params:
             d = get_driver_by_model(params["driver_model"])
             if d:

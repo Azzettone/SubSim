@@ -99,3 +99,90 @@ NUM_HORN_SECTIONS = 8
 
 # ─── Tolleranza numerica ──────────────────────────────────────────────────────
 EPSILON = 1e-10
+
+# ─── Tipi di enclosure (caricamento acustico) ────────────────────────────────
+# Categorie principali (per il selector a 3 opzioni del mockup)
+ENCLOSURE_CATEGORY_HORN   = "horn"
+ENCLOSURE_CATEGORY_REFLEX = "reflex"
+ENCLOSURE_CATEGORY_HYBRID = "mixed_hybrid"
+
+ENCLOSURE_CATEGORIES = [
+    ENCLOSURE_CATEGORY_HORN,
+    ENCLOSURE_CATEGORY_REFLEX,
+    ENCLOSURE_CATEGORY_HYBRID,
+]
+ENCLOSURE_CATEGORY_LABELS = {
+    ENCLOSURE_CATEGORY_HORN:   "Tromba",
+    ENCLOSURE_CATEGORY_REFLEX: "Reflex / Bandpass",
+    ENCLOSURE_CATEGORY_HYBRID: "Mixed-Hybrid",
+}
+
+# Varianti specifiche per ogni categoria
+ENCLOSURE_HORN         = "horn"              # Tromba caricata pura
+ENCLOSURE_REFLEX       = "reflex"            # Bass-reflex standard
+ENCLOSURE_BANDPASS_4   = "bandpass_4"        # Bandpass 4° ordine (cassa chiusa + reflex front)
+ENCLOSURE_BANDPASS_6   = "bandpass_6"        # Bandpass 6° ordine (reflex rear + reflex front)
+ENCLOSURE_HORN_REFLEX  = "horn_reflex"       # Tromba frontale + porta reflex (ibrido)
+ENCLOSURE_BANDPASS_HORN   = "bandpass_horn"     # Bandpass + carico a tromba (stile DC10)
+ENCLOSURE_BANDPASS_REFLEX = "bandpass_reflex"   # Bandpass + extra porta reflex
+
+# Varianti per categoria
+ENCLOSURE_VARIANTS = {
+    ENCLOSURE_CATEGORY_HORN: [
+        ENCLOSURE_HORN,
+        ENCLOSURE_HORN_REFLEX,
+    ],
+    ENCLOSURE_CATEGORY_REFLEX: [
+        ENCLOSURE_REFLEX,
+        ENCLOSURE_BANDPASS_4,
+        ENCLOSURE_BANDPASS_6,
+    ],
+    ENCLOSURE_CATEGORY_HYBRID: [
+        ENCLOSURE_BANDPASS_HORN,
+        ENCLOSURE_BANDPASS_REFLEX,
+        ENCLOSURE_HORN_REFLEX,
+    ],
+}
+ENCLOSURE_LABELS = {
+    ENCLOSURE_HORN:           "Tromba caricata (Horn Loaded)",
+    ENCLOSURE_REFLEX:         "Bass-Reflex standard",
+    ENCLOSURE_BANDPASS_4:     "Bandpass 4° ordine",
+    ENCLOSURE_BANDPASS_6:     "Bandpass 6° ordine",
+    ENCLOSURE_HORN_REFLEX:    "Tromba + Porta Reflex (ibrido)",
+    ENCLOSURE_BANDPASS_HORN:  "Bandpass + Tromba (stile DC10/SPKP)",
+    ENCLOSURE_BANDPASS_REFLEX:"Bandpass + Porta Reflex aggiuntiva",
+}
+
+# Quali varianti contengono una tromba (→ mostrare parametri horn)
+ENCLOSURE_HAS_HORN = {
+    ENCLOSURE_HORN, ENCLOSURE_HORN_REFLEX, ENCLOSURE_BANDPASS_HORN
+}
+# Quali varianti contengono una porta reflex (→ mostrare parametri reflex)
+ENCLOSURE_HAS_REFLEX = {
+    ENCLOSURE_REFLEX, ENCLOSURE_BANDPASS_4, ENCLOSURE_BANDPASS_6,
+    ENCLOSURE_HORN_REFLEX, ENCLOSURE_BANDPASS_HORN, ENCLOSURE_BANDPASS_REFLEX,
+}
+# Quali varianti sono bandpass (→ mostrare volumi camera front/rear)
+ENCLOSURE_IS_BANDPASS = {
+    ENCLOSURE_BANDPASS_4, ENCLOSURE_BANDPASS_6,
+    ENCLOSURE_BANDPASS_HORN, ENCLOSURE_BANDPASS_REFLEX,
+}
+
+# Default enclosure per tipo speaker
+ENCLOSURE_DEFAULT_FOR_SPEAKER = {
+    SPEAKER_TYPE_SUB:       ENCLOSURE_HORN,
+    SPEAKER_TYPE_CD:        ENCLOSURE_HORN,
+    SPEAKER_TYPE_FULLRANGE: ENCLOSURE_BANDPASS_HORN,
+}
+
+# ─── Tipi di porta reflex ────────────────────────────────────────────────────
+PORT_TYPE_CIRCULAR = "circular"
+PORT_TYPE_SLOT     = "slot"
+PORT_TYPE_PASSIVE  = "passive_radiator"
+
+PORT_TYPES = [PORT_TYPE_CIRCULAR, PORT_TYPE_SLOT, PORT_TYPE_PASSIVE]
+PORT_TYPE_LABELS = {
+    PORT_TYPE_CIRCULAR: "Circolare",
+    PORT_TYPE_SLOT:     "Slot / Fessura",
+    PORT_TYPE_PASSIVE:  "Radiatore Passivo",
+}

@@ -35,5 +35,8 @@ Thumbs.db
 # SQLite databases (generated at runtime)
 *.db
 
-# Upload temporanei
+# ── Reference material / uploads locali ──────────────────────────────────────
+# UPLOADS/ (maiuscolo) — fogli Excel, CSV originali, screenshot di riferimento
 UPLOADS/
+# uploads/ (minuscolo) — conversazioni AI e documenti di lavoro locali
+uploads/
