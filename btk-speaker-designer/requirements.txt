@@ -24,9 +24,9 @@ reportlab>=3.6.0     # Report PDF
 pytest>=6.0.0
 pytest-cov>=2.0.0
 
-# Visualizzazione 3D (opzionale)
-# vtk>=9.0.0
-# pyvista>=0.32.0
+# Visualizzazione 3D
+pyvista>=0.44.0
+pyvistaqt>=0.11.0
 
 # Geometry / CAD (Fase 2 - Block Assembler → solidi 3D)
 # Su Linux richiede librerie sistema:
