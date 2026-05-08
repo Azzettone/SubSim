@@ -27,3 +27,9 @@ pytest-cov>=2.0.0
 # Visualizzazione 3D (opzionale)
 # vtk>=9.0.0
 # pyvista>=0.32.0
+
+# Geometry / CAD (Fase 2 - Block Assembler → solidi 3D)
+# Su Linux richiede librerie sistema:
+#   sudo apt install libgl1 libglu1-mesa libxrender1 libxext6
+build123d>=0.10.0
+pyvista>=0.43.0      # Viewer 3D standalone (Fase 2.2)
