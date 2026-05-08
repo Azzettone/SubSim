@@ -188,6 +188,7 @@ class HornBlock(Block):
         panel_material: str,
         c: float = SPEED_OF_SOUND,
         origin: Optional[np.ndarray] = None,
+        cabinet_depth: Optional[float] = None,
     ) -> None:
         # Validazione parametri scalari
         if expansion not in EXPANSION_TYPES:
@@ -225,6 +226,9 @@ class HornBlock(Block):
         self.panel_thickness: float = float(panel_thickness)
         self.panel_material: str = panel_material
         self.c: float = float(c)
+        self.cabinet_depth: Optional[float] = (
+            float(cabinet_depth) if cabinet_depth is not None else None
+        )
         self.origin: np.ndarray = (
             np.asarray(origin, dtype=float).reshape(3)
             if origin is not None else np.zeros(3)
@@ -271,6 +275,7 @@ class HornBlock(Block):
         panel_material: str = DEFAULT_PANEL_MATERIAL,
         c: float = SPEED_OF_SOUND,
         origin: Optional[np.ndarray] = None,
+        cabinet_depth: Optional[float] = None,
     ) -> "HornBlock":
         """
         Costruisce HornBlock partendo dai parametri acustici.
@@ -290,15 +295,16 @@ class HornBlock(Block):
             mouth_width: larghezza bocca [m]
             mouth_height: altezza bocca [m]
             fold: 0 (dritta), 1 (1-fold), 2 (2-fold)
-            section_shape: "rectangular" (entrambi i lati divergono mantenendo
-                aspect_ratio) o "trapezoidal" (top/bottom paralleli, solo
-                pareti laterali divergono)
+            section_shape: "rectangular" o "trapezoidal"
             throat_adapter: opzionale, modifica area gola rispetto a Sd
             n_sections: discretizzazione profilo
             panel_thickness: spessore default pannelli [m]
             panel_material: materiale identificativo
             c: velocità del suono [m/s]
             origin: posizione iniziale gola nello spazio (default origine)
+            cabinet_depth: profondità interna del cabinet [m]. Se impostata,
+                il fold avviene a multipli di questo valore invece che a L/2.
+                Tipicamente = ChamberBlock.depth - 2*panel_thickness.
         """
         # Throat area (con eventuale adapter)
         if driver.sd <= 0.0:
@@ -333,6 +339,7 @@ class HornBlock(Block):
             panel_material=panel_material,
             c=c,
             origin=origin,
+            cabinet_depth=cabinet_depth,
         )
 
     @classmethod
@@ -612,7 +619,8 @@ class HornBlock(Block):
 
         L'asse è "srotolato": x_axial va da 0 (gola) a self.length (bocca).
         Per fold=0 le sezioni sono allineate lungo +Z dal punto origin.
-        Per fold=1/2 il fold è applicato in `_apply_fold_transform`.
+        Per fold≥1 le sezioni vengono piegate in segmenti da _fold_depth()
+        e impilate lungo +Y (altezza del cabinet).
         """
         N = self.n_sections
         xs = np.linspace(0.0, self.length, N)
@@ -631,17 +639,12 @@ class HornBlock(Block):
                 area = self.mouth_area
             w, h = self._section_dims(area, x / self.length if self.length > 0 else 0.0)
 
-            # Posizionamento in spazio "srotolato" (asse +Z)
-            center_unfolded = np.array([0.0, 0.0, x])
-            normal_unfolded = np.array([0.0, 0.0, 1.0])
-            verts_unfolded = self._section_quad(
-                center_unfolded, normal_unfolded, w, h
-            )
+            # Centro e normale nel sistema folded
+            center, normal = self._apply_fold_transform(x, w, h)
 
-            # Applica trasformazione di fold
-            center, normal, verts = self._apply_fold_transform(
-                x, center_unfolded, normal_unfolded, verts_unfolded,
-            )
+            # Vertici della sezione (rettangolo centrato)
+            verts = self._section_quad(center, normal, w, h)
+
             # Sposta nel sistema globale (origin)
             center = center + self.origin
             verts = verts + self.origin
@@ -686,77 +689,113 @@ class HornBlock(Block):
             center - hw * x_loc + hh * y_loc,
         ])
 
+    # ── Fold geometry helpers ─────────────────────────────────────────────────
+
+    def _fold_depth(self) -> float:
+        """Lunghezza fisica di un singolo leg del fold [m].
+
+        La profondità naturale (acusticamente corretta) è L/(fold+1).
+
+        Se ``cabinet_depth`` è impostato, lo usa come vincolo MASSIMO:
+        se il cabinet è più profondo del necessario, utilizza la profondità
+        naturale. Se è più corto, lo rispetta ma potrà generare sezioni
+        "compresse" (z fuori da [0, D]) — in quel caso il design è fisicamente
+        invalido e richiede più fold.
+        """
+        D_natural = self.length / (self.fold + 1)
+        if self.cabinet_depth is not None and self.cabinet_depth > 0:
+            return min(float(self.cabinet_depth), D_natural)
+        return D_natural
+
+    def _section_h_at(self, x_m: float) -> float:
+        """Altezza sezione [m] alla posizione assiale x_m (clamped a [0, length])."""
+        x = max(0.0, min(x_m, self.length))
+        area = area_at_position(
+            x_m=x,
+            throat_area_m2=self.throat_area,
+            flare_rate_m=self.flare_rate,
+            expansion_type=self.expansion,
+            hypex_T=self.hypex_T,
+        )
+        area = min(area, self.mouth_area)
+        _, h = self._section_dims(area, x / self.length if self.length > 0 else 1.0)
+        return float(h)
+
+    def _fold_y_shift_at(self, leg: int) -> float:
+        """Shift cumulativo in Y per il leg n-esimo [m].
+
+        Ogni fold condivide una paratia orizzontale: l'altezza della paratia
+        è uguale all'altezza della sezione nel punto di piega.
+        Y(leg 0) = 0
+        Y(leg k) = sum_{j=1}^{k} h(j * D)
+        dove D = _fold_depth() e h(...) = altezza sezione in quel punto.
+        """
+        if leg == 0:
+            return 0.0
+        D = self._fold_depth()
+        total = 0.0
+        for k in range(1, leg + 1):
+            total += self._section_h_at(k * D)
+        return total
+
     def _apply_fold_transform(
         self,
         x_axial: float,
-        center: np.ndarray,
-        normal: np.ndarray,
-        verts: np.ndarray,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Applica la piegatura dell'asse della tromba.
+        w: float,
+        h: float,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Calcola centro e normale della sezione nel sistema folded.
 
-        fold=0: identità.
-        fold=1: l'asse piega di 180° a x = L/2 (lungo asse Y, verso -Z).
-        fold=2: due piegature a x = L/3 e 2L/3.
+        Geometria Z-fold impilato (archetipo A — 186 Horn / 1850 Folded):
+        - Leg 0 (pari):   percorre +Z da 0 a D.
+        - Leg 1 (dispari): percorre -Z da D a 0, spostato in +Y.
+        - Leg 2 (pari):   percorre +Z da 0 a D, spostato ancora in +Y.
+        - … fino a leg = self.fold (ultimo, può essere più corto di D).
 
-        Implementazione semplificata: riflessione/rotazione rigida del
-        sistema locale in segmenti. Le sezioni mantengono area e dimensioni;
-        si genereranno le paratie di piegatura come pannelli interni a parte.
+        Il shift Y di ogni leg è l'altezza della sezione al punto di piega
+        precedente → i leg si "toccano" senza gap né overlap al fold panel.
+
+        Args:
+            x_axial: posizione lungo l'asse acustico srotolato [m]
+            w:       larghezza sezione [m]
+            h:       altezza sezione [m]
+
+        Returns:
+            (center, normal) — np.ndarray shape (3,) ciascuno
         """
         if self.fold == 0:
-            return center, normal, verts
+            return np.array([0.0, 0.0, x_axial]), np.array([0.0, 0.0, 1.0])
 
-        L = self.length
-        if self.fold == 1:
-            # Segmento 1: 0 → L/2 lungo +Z
-            # Segmento 2: L/2 → L lungo -Z spostato in +Y di mouth_height
-            x0 = L / 2.0
-            if x_axial <= x0:
-                return center, normal, verts
-            # Riflessione: nuovo asse va a -Z, partendo da z=x0, traslato in +Y
-            new_z = x0 - (x_axial - x0)
-            shift_y = self.mouth_height
-            new_center = np.array([center[0], center[1] + shift_y, new_z])
-            new_normal = np.array([0.0, 0.0, -1.0])
-            # Rotazione 180° attorno asse Y dei vertici intorno a (0, 0, x0)
-            rotated = self._rotate_y_180(verts, pivot_z=x0)
-            rotated[:, 1] += shift_y
-            return new_center, new_normal, rotated
+        D = self._fold_depth()
 
-        if self.fold == 2:
-            x1 = L / 3.0
-            x2 = 2.0 * L / 3.0
-            if x_axial <= x1:
-                return center, normal, verts
-            if x_axial <= x2:
-                # Segmento 2: -Z dopo prima piega, traslato in +Y
-                new_z = x1 - (x_axial - x1)
-                shift_y = self.mouth_height
-                new_center = np.array([center[0], center[1] + shift_y, new_z])
-                new_normal = np.array([0.0, 0.0, -1.0])
-                rotated = self._rotate_y_180(verts, pivot_z=x1)
-                rotated[:, 1] += shift_y
-                return new_center, new_normal, rotated
-            # Segmento 3: torna a +Z dopo seconda piega, traslato +Y di 2*mouth_height
-            # Nel segmento 2 a x=x2, z = x1 - (x2 - x1) = 2x1 - x2 = -L/3 (negativo!)
-            # ricalibriamo: posizione di pivot per la 2a piega
-            z_at_x2 = x1 - (x2 - x1)  # punto in cui avviene 2a piega lungo Z
-            new_z = z_at_x2 + (x_axial - x2)
-            shift_y = 2.0 * self.mouth_height
-            new_center = np.array([center[0], center[1] + shift_y, new_z])
-            new_normal = np.array([0.0, 0.0, 1.0])
-            # Doppia rotazione → identità su normale, ma posizione ricalcolata
-            rotated = self._rotate_y_180(verts, pivot_z=x1)  # prima piega
-            rotated = self._rotate_y_180(rotated, pivot_z=z_at_x2)  # seconda piega
-            rotated[:, 1] += shift_y
-            return new_center, new_normal, rotated
+        # Numero del leg corrente (0-indexed, clamped all'ultimo fold)
+        leg = int(x_axial / D) if D > 0.0 else 0
+        leg = min(leg, self.fold)
 
-        return center, normal, verts
+        # Posizione dentro il leg corrente
+        x_in_leg = x_axial - leg * D
+
+        # Y base del leg (bottom del segmento nel sistema globale del cabinet)
+        shift_y = self._fold_y_shift_at(leg)
+
+        # Direzione di propagazione: +Z per leg pari, -Z per leg dispari
+        if leg % 2 == 0:
+            center_z = x_in_leg
+            normal = np.array([0.0, 0.0, 1.0])
+        else:
+            center_z = D - x_in_leg
+            normal = np.array([0.0, 0.0, -1.0])
+
+        # Centro del leg è centrato a Y = shift_y (bottom del leg)
+        # Il _section_quad centrerà i vertici attorno a questo centro
+        center = np.array([0.0, shift_y, center_z])
+        return center, normal
 
     @staticmethod
     def _rotate_y_180(verts: np.ndarray, pivot_z: float) -> np.ndarray:
-        """Rotazione 180° attorno a asse Y passante per (0,*,pivot_z)."""
+        """Rotazione 180° attorno a asse Y passante per (0,*,pivot_z).
+        Mantenuto per compatibilità backward (usato nelle fold_baffle legacy).
+        """
         out = verts.copy()
         out[:, 0] = -out[:, 0]
         out[:, 2] = 2.0 * pivot_z - out[:, 2]
@@ -878,20 +917,27 @@ class HornBlock(Block):
             }],
         ))
 
-        # Fold baffles (paratie interne di piegatura): semplificate
-        # Posizione: piano orizzontale che separa i segmenti folded
+        # Fold baffles (paratie interne di piegatura)
+        # Geometria fisicamente corretta: ogni baratia è un piano orizzontale
+        # alla Y di transizione tra i leg adiacenti.
+        #   fold_baffle_1: tra leg 0 e leg 1
+        #   fold_baffle_2: tra leg 1 e leg 2
+        #
+        # Il piano di separazione è a Y = _fold_y_shift_at(k) / 2 per leg k==1,
+        # oppure (_fold_y_shift_at(k) + _fold_y_shift_at(k-1)) / 2 in generale.
+        # La paratia copre z ∈ [0, D] e x ∈ [±mouth_width/2].
         if self.fold >= 1:
-            # Paratia 1: a y = mouth_height/2, copre estensione folded
-            # Approssimazione: rettangolo che copre l'overlap dei due segmenti
-            x_max = self.mouth_width / 2.0 * 1.2  # margine
-            z_lo = -self.length / 2.0 * 1.2
-            z_hi = self.length / 2.0 * 1.2
-            y_baffle = self.mouth_height / 2.0
+            D = self._fold_depth()
+            x_max = self.mouth_width / 2.0
+            # Baffle 1: tra leg 0 (y_center=0) e leg 1 (y_center=shift_y_1)
+            #   → è la superficie comune a y = shift_y_1/2
+            #     (che corrisponde fisicamente all'altezza della sezione a x=D / 2)
+            y_b1 = self._fold_y_shift_at(1) / 2.0
             v = np.array([
-                [-x_max, y_baffle, z_lo],
-                [+x_max, y_baffle, z_lo],
-                [+x_max, y_baffle, z_hi],
-                [-x_max, y_baffle, z_hi],
+                [-x_max, y_b1, 0.0],
+                [+x_max, y_b1, 0.0],
+                [+x_max, y_b1, D],
+                [-x_max, y_b1, D],
             ]) + self.origin
             panels.append(Panel(
                 name="fold_baffle_1",
@@ -901,15 +947,15 @@ class HornBlock(Block):
                 is_internal=True,
             ))
         if self.fold >= 2:
-            x_max = self.mouth_width / 2.0 * 1.2
-            z_lo = -self.length / 2.0 * 1.2
-            z_hi = self.length / 2.0 * 1.2
-            y_baffle = 1.5 * self.mouth_height
+            D = self._fold_depth()
+            x_max = self.mouth_width / 2.0
+            # Baffle 2: tra leg 1 e leg 2
+            y_b2 = (self._fold_y_shift_at(1) + self._fold_y_shift_at(2)) / 2.0
             v = np.array([
-                [-x_max, y_baffle, z_lo],
-                [+x_max, y_baffle, z_lo],
-                [+x_max, y_baffle, z_hi],
-                [-x_max, y_baffle, z_hi],
+                [-x_max, y_b2, 0.0],
+                [+x_max, y_b2, 0.0],
+                [+x_max, y_b2, D],
+                [-x_max, y_b2, D],
             ]) + self.origin
             panels.append(Panel(
                 name="fold_baffle_2",

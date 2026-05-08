@@ -261,6 +261,64 @@ class TestFold:
                 driver=driver_18, cutoff_frequency=50.0, fold=3,
             )
 
+    def test_cabinet_depth_limits_fold_z(self, driver_18):
+        """cabinet_depth≥L/2 non cambia il fold_depth (usa D_natural=L/2).
+        L'ultima sezione deve tornare a z≈0 per la corretta geometria fold=1."""
+        # cabinet_depth grande → D = min(D, L/2) = L/2 → comportamento standard
+        D_large = 5.0  # sicuramente > L/2 per qualsiasi Fc ≥ 50Hz
+        h1 = HornBlock.from_acoustics(
+            driver=driver_18, cutoff_frequency=50.0,
+            mouth_width=1.0, mouth_height=0.7, fold=1,
+            cabinet_depth=D_large,
+        )
+        # Con D = min(5.0, L/2) = L/2, l'ultima sezione del leg 1 torna a z=0
+        last_sec = h1.sections[-1]
+        z_last = float(last_sec.center[2]) - float(h1.origin[2])
+        D = h1._fold_depth()
+        # z_last = D - x_in_leg = D - (L - D) = 2D - L ≈ 0 (perché D = L/2)
+        assert abs(z_last) < D * 0.05, (
+            f"z_last={z_last:.4f} dovrebbe essere ~0 per fold=1 con D=L/2"
+        )
+
+    def test_cabinet_depth_y_shift_positive(self, driver_18):
+        """Le sezioni del secondo leg devono avere Y > 0 (spostato verso l'alto)."""
+        h1 = HornBlock.from_acoustics(
+            driver=driver_18, cutoff_frequency=50.0,
+            mouth_width=1.0, mouth_height=0.7, fold=1,
+            n_sections=10,
+        )
+        secs = h1.sections
+        # Il secondo leg inizia dopo la metà delle sezioni
+        # Cerchiamo una sezione con x_axial > L/2
+        D = h1._fold_depth()
+        secs_leg1 = [s for s in secs if s.x_axial > D]
+        assert secs_leg1, "Deve esserci almeno una sezione nel leg 1"
+        # Y centro sezioni leg 1 (relative a origin) > Y sezioni leg 0
+        y_leg1 = float(secs_leg1[0].center[1]) - float(h1.origin[1])
+        y_leg0 = float(secs[0].center[1]) - float(h1.origin[1])
+        assert y_leg1 > y_leg0, (
+            f"Leg 1 deve avere y_center > leg 0: "
+            f"y_leg1={y_leg1:.3f}, y_leg0={y_leg0:.3f}"
+        )
+
+    def test_fold_baffle_y_position(self, driver_18):
+        """La fold_baffle_1 deve stare a Y tra i due leg (Y > 0)."""
+        D = 0.65  # m
+        horn = HornBlock.from_acoustics(
+            driver=driver_18, cutoff_frequency=50.0,
+            mouth_width=1.0, mouth_height=0.7, fold=1,
+            cabinet_depth=D, n_sections=8,
+        )
+        names = {p.name: p for p in horn.panels}
+        assert "fold_baffle_1" in names
+        baffle = names["fold_baffle_1"]
+        # Y dei vertici della baffle relativi a origin
+        y_vals = baffle.vertices[:, 1] - horn.origin[1]
+        y_b = float(y_vals.mean())
+        # Deve essere tra 0 e throat height (positivo ma non gigante)
+        assert y_b > 0, f"fold_baffle_1 Y={y_b:.3f} deve essere > 0"
+        assert y_b < 2.0, f"fold_baffle_1 Y={y_b:.3f} sembra troppo grande"
+
 
 # ─── Section shape ───────────────────────────────────────────────────────────
 

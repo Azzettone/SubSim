@@ -264,6 +264,10 @@ class AssemblyModel(QObject):
 
             # HornBlock dai parametri acustici
             hp = self._horn_params
+            # Nota: cabinet_depth non viene impostato qui automaticamente.
+            # Il ChamberBlock è la camera posteriore del driver (z < 0),
+            # non il cabinet della tromba (che si estende a z > 0).
+            # Il fold_depth è calcolato internamente come L/(fold+1).
             try:
                 horn = HornBlock.from_acoustics(
                     driver=self._driver,
