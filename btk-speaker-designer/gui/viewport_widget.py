@@ -330,6 +330,7 @@ class Viewport3DWidget(QWidget):
         self._plotter.add_axes(interactive=False)
 
         n_added = 0
+        all_bounds = []
         for name, solid in self._solids.items():
             if solid is None:
                 continue
@@ -350,15 +351,87 @@ class Viewport3DWidget(QWidget):
                 show_edges=self._wireframe_mode,
                 label=name,
             )
+            all_bounds.append(mesh.bounds)
             n_added += 1
 
-        # CRUCIALE: senza reset_camera la scena resta vuota in viewport.
+        # Grid di riferimento e ruler con dimensioni in mm
         if n_added > 0:
+            self._add_floor_grid(all_bounds)
+            # show_bounds: ruler attorno alla scena con etichette in mm
+            try:
+                self._plotter.show_bounds(
+                    grid=False,
+                    ticks="outside",
+                    minor_ticks=False,
+                    xlabel="X (mm)",
+                    ylabel="Y (mm)",
+                    ztitle="Z (mm)",
+                    padding=0.05,
+                    color="#666688",
+                    font_size=10,
+                    fmt="%.0f",
+                )
+            except Exception:
+                pass  # show_bounds è opzionale — non blocca il render
             self._plotter.reset_camera()
             self._plotter.view_isometric()
         else:
             print("[Viewport3D] _render_solids: NESSUN solido aggiunto alla scena")
         self._plotter.render()
+
+    def _add_floor_grid(self, all_bounds) -> None:
+        """Aggiunge una griglia di pavimento per riferimento visivo in mm."""
+        try:
+            import pyvista as pv
+            import numpy as np
+            # Estende i bounds totali della scena
+            xs = [b[0] for b in all_bounds] + [b[1] for b in all_bounds]
+            ys = [b[2] for b in all_bounds] + [b[3] for b in all_bounds]
+            zs = [b[4] for b in all_bounds] + [b[5] for b in all_bounds]
+            xmin, xmax = min(xs), max(xs)
+            ymin, ymax = min(ys), max(ys)
+            z_floor = min(zs)
+
+            span = max(xmax - xmin, ymax - ymin, 1.0)
+            pad = span * 0.15
+            x0, x1 = xmin - pad, xmax + pad
+            y0, y1 = ymin - pad, ymax + pad
+
+            # Griglia: line spacing = 100 mm (10 cm)
+            spacing = max(100.0, round(span / 15 / 100) * 100)
+            # Linee parallele a Y (costante X)
+            x_ticks = np.arange(
+                round(x0 / spacing) * spacing,
+                x1 + spacing,
+                spacing
+            )
+            y_ticks = np.arange(
+                round(y0 / spacing) * spacing,
+                y1 + spacing,
+                spacing
+            )
+            lines = []
+            for x in x_ticks:
+                lines += [[x, y0, z_floor], [x, y1, z_floor]]
+            for y in y_ticks:
+                lines += [[x0, y, z_floor], [x1, y, z_floor]]
+            if lines:
+                pts = np.array(lines, dtype=float)
+                n_lines = len(pts) // 2
+                cells = np.column_stack([
+                    np.full(n_lines, 2),
+                    np.arange(0, 2 * n_lines, 2),
+                    np.arange(1, 2 * n_lines + 1, 2),
+                ]).ravel()
+                grid = pv.PolyData()
+                grid.points = pts
+                grid.lines = cells
+                self._plotter.add_mesh(
+                    grid, color="#2A2A4A", line_width=1, opacity=0.6,
+                    render_lines_as_tubes=False,
+                )
+        except Exception:
+            pass  # griglia opzionale
 
     def _solid_to_mesh(self, solid):
         """Converte solid build123d → pyvista PolyData via STL temporaneo.

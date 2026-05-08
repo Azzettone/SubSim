@@ -29,6 +29,8 @@ import warnings
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, Optional
 
+import numpy as np
+
 try:
     from PyQt5.QtCore import QObject, pyqtSignal as Signal
 except ImportError:                                   # pragma: no cover
@@ -281,21 +283,27 @@ class AssemblyModel(QObject):
                 self.assembly_changed.emit()
                 return False
 
-            # ChamberBlock (opzionale) — usato per cabinet di volta tromba
+            # ChamberBlock (opzionale) — posizionata DIETRO la gola della tromba.
+            # Camera: front-face a z=0 (= gola tromba), si estende verso -Z.
+            # Centrata verticalmente su Y (tromba è centrata a y=0).
             chamber: Optional[ChamberBlock] = None
             if self._chamber_params.enabled:
                 cp = self._chamber_params
                 try:
+                    # origin=[0, -H/2, -D] → front a z=0, centrata in Y
+                    chamber_origin = np.array([0.0, -cp.height / 2, -cp.depth])
                     if cp.shape == "trapezoidal" and cp.rear_width is not None:
                         chamber = ChamberBlock(
                             width=cp.width, height=cp.height, depth=cp.depth,
                             shape="trapezoidal", rear_width=cp.rear_width,
                             panel_thickness=cp.panel_thickness,
+                            origin=chamber_origin,
                         )
                     else:
                         chamber = ChamberBlock.from_dimensions(
                             width=cp.width, height=cp.height, depth=cp.depth,
                             panel_thickness=cp.panel_thickness,
+                            origin=chamber_origin,
                         )
                 except Exception as exc:
                     self.validation_failed.emit(f"ChamberBlock: {exc}")
@@ -312,9 +320,15 @@ class AssemblyModel(QObject):
                 except Exception as exc:
                     self.validation_failed.emit(f"PortBlock: {exc}")
 
-            # DriverBlock (sempre presente se c'è driver)
+            # DriverBlock: front-face a z=0 (gola tromba), cestello verso -Z
+            # (nella camera). mounting_depth=50mm è la profonditò visiva default.
+            _DRV_DEPTH = 0.05  # 50 mm
             try:
-                driver_block = DriverBlock(driver=self._driver)
+                driver_block = DriverBlock(
+                    driver=self._driver,
+                    mounting_depth=_DRV_DEPTH,
+                    position=np.array([0.0, 0.0, -_DRV_DEPTH]),
+                )
             except Exception as exc:
                 self.validation_failed.emit(f"DriverBlock: {exc}")
                 driver_block = None
