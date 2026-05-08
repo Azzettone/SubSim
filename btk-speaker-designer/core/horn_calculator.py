@@ -3,6 +3,13 @@ Calcolatore principale per trombe acustiche.
 Implementa le formule dal foglio di calcolo Horn Calculator originale.
 
 Supporta espansione esponenziale, conica, tractrix e hypex.
+
+.. deprecated::
+    Il pipeline diretto ``design_horn() → HornGeometry`` è la via legacy.
+    La nuova architettura MVC usa ``btk_speaker_designer.blocks.HornBlock``
+    tramite ``AssemblyModel.rebuild()``.
+    Questo modulo rimane come motore di calcolo condiviso (HornGeometry,
+    HornSection, area_at_position, ecc.).
 """
 
 import numpy as np

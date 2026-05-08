@@ -1358,6 +1358,10 @@ class HornViewTabs(QWidget):
     Widget principale area grafica destra.
     Contiene 4 tab: TOP / FRONT / SIDE / 3D.
 
+    Tab 3D:
+      - Se pyvistaqt è disponibile, usa Viewport3DWidget (rendering OpenGL).
+      - Altrimenti fallback a _3DCanvas (matplotlib Axes3D).
+
     Segnali:
         sections_modified (list): emesso da qualsiasi vista 2D dopo drag confermato.
     """
@@ -1410,7 +1414,15 @@ class HornViewTabs(QWidget):
         self._top_view   = _TopCanvas()
         self._front_view = _FrontCanvas()
         self._side_view  = _SideCanvas()
-        self._3d_view    = _3DCanvas()
+
+        # Tab 3D: usa Viewport3DWidget (pyvistaqt) se disponibile
+        try:
+            from .viewport_widget import Viewport3DWidget
+            self._3d_view      = Viewport3DWidget(self)
+            self._3d_is_pyvista = True
+        except Exception:
+            self._3d_view      = _3DCanvas()
+            self._3d_is_pyvista = False
 
         self.tab_widget.addTab(self._top_view,   "TOP")
         self.tab_widget.addTab(self._front_view, "FRONT")
@@ -1428,6 +1440,17 @@ class HornViewTabs(QWidget):
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
         self._pending_3d_update = False
 
+    # ── MVC: integrazione AssemblyModel ─────────────────────────────────────
+
+    def set_model(self, model) -> None:
+        """
+        Connette l'AssemblyModel: la vista 3D si aggiorna automaticamente
+        quando il modello emette ``solids_rebuilt``.
+        Solo per Viewport3DWidget (pyvistaqt); _3DCanvas non è connesso.
+        """
+        if self._3d_is_pyvista:
+            model.solids_rebuilt.connect(self._3d_view.update_from_solids)
+
     # ── API pubblica ────────────────────────────────────────────────────────
 
     def update_horn(self, horn_geometry, cabinet_geometry=None):
@@ -1441,11 +1464,14 @@ class HornViewTabs(QWidget):
         self._front_view.update_horn(horn_geometry, cabinet_geometry)
         self._side_view.update_horn(horn_geometry, cabinet_geometry)
 
-        if current == 3:
-            self._3d_view.update_horn(horn_geometry, cabinet_geometry)
-            self._pending_3d_update = False
-        else:
-            self._pending_3d_update = True   # aggiorna quando si apre il tab 3D
+        # Tab 3D: solo se è matplotlib (_3DCanvas); Viewport3DWidget risponde
+        # al segnale model.solids_rebuilt --- set_model() connette il segnale.
+        if not self._3d_is_pyvista:
+            if current == 3:
+                self._3d_view.update_horn(horn_geometry, cabinet_geometry)
+                self._pending_3d_update = False
+            else:
+                self._pending_3d_update = True
 
     def update_reflex(self, result, driver):
         """
@@ -1463,7 +1489,7 @@ class HornViewTabs(QWidget):
         # → mostrano placeholder temporaneo
         if hasattr(self._top_view, '_draw_placeholder'):
             self._top_view._draw_placeholder()
-        if hasattr(self._3d_view, '_draw_placeholder'):
+        if not self._3d_is_pyvista and hasattr(self._3d_view, '_draw_placeholder'):
             self._3d_view._draw_placeholder()
 
     # ── Slot ────────────────────────────────────────────────────────────────
@@ -1475,7 +1501,7 @@ class HornViewTabs(QWidget):
 
     def _on_tab_changed(self, idx: int):
         """Rendering 3D lazy: solo quando il tab 3D diventa visibile."""
-        if idx == 3 and self._pending_3d_update:
+        if idx == 3 and self._pending_3d_update and not self._3d_is_pyvista:
             horn = getattr(self, "_horn_geometry", None)
             cab  = getattr(self, "_cabinet_geometry", None)
             if horn is not None:

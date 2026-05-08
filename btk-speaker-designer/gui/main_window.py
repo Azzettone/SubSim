@@ -79,6 +79,15 @@ if PYQT_AVAILABLE:
             self._build_central_widget()
             self._build_status_bar()
 
+            # MVC: connetti segnali del modello
+            self.model.rebuild_started.connect(
+                lambda: self.status_bar.showMessage("⧗ Ricalcolo in corso...")
+            )
+            self.model.validation_failed.connect(
+                lambda msg: self.status_bar.showMessage(f"⚠ {msg}")
+            )
+            self.model.assembly_changed.connect(self._on_model_changed)
+
         # ── Stile ──────────────────────────────────────────────────────────
 
         def _apply_style(self):
@@ -155,6 +164,8 @@ if PYQT_AVAILABLE:
             for label, slot, tip in [
                 ("📐  Esporta DXF", self._action_export_dxf, "Esporta DXF per CNC"),
                 ("📄  Esporta PDF", self._action_export_pdf, "Esporta report PDF"),
+                ("⬡  Esporta STEP", self._action_export_step, "Esporta solido 3D STEP"),
+                ("⬡  Esporta STL",  self._action_export_stl,  "Esporta mesh STL per stampa 3D"),
             ]:
                 act = QAction(label, self)
                 act.setToolTip(tip)
@@ -211,7 +222,13 @@ if PYQT_AVAILABLE:
             self.vsplit.addWidget(self.analysis_tabs)
             self.vsplit.setSizes([480, 400])
 
-            # ── Connessione segnali ────────────────────────────────────────
+            # ── MVC: crea modello e iniettalo nelle viste ───────────────────
+            from .assembly_model import AssemblyModel
+            self.model = AssemblyModel(self)
+            self.input_panel.set_model(self.model)
+            self.horn_view.set_model(self.model)
+
+            # ── Connessione segnali (vecchio pipeline + MVC bridge) ─────────
             self.input_panel.calculate_requested.connect(self._on_calculate)
             self.input_panel.driver_changed.connect(self._on_driver_changed)
             self.input_panel.geometry_changed.connect(self._on_geometry_changed)
@@ -540,7 +557,41 @@ if PYQT_AVAILABLE:
             except Exception as e:
                 self.status_bar.showMessage(f"Errore cambio geometria: {e}")
 
+        def _on_model_changed(self):
+            """Aggiorna status bar quando l'assembly model cambia."""
+            m = self.model
+            if m.horn_block is None:
+                return
+            h = m.horn_block
+            self.status_bar.showMessage(
+                f"[Model] Fc={h.cutoff_frequency_hz:.0f} Hz  │  "
+                f"L={h.horn_length_m*100:.1f} cm  │  "
+                f"m={h.flare_rate_m:.4f} m⁻¹  │  {m.speaker_type}"
+            )
+
         # ── Azioni toolbar ────────────────────────────────────────────────
+
+        def _action_export_step(self):
+            """Esporta solido 3D in formato STEP (richiede modello ricostruito)."""
+            vp = self.horn_view._3d_view
+            if hasattr(vp, 'export_step'):
+                vp.export_step()   # apre file dialog internamente
+            else:
+                QMessageBox.information(
+                    self, "Export STEP",
+                    "Attiva la vista 3D (pyvistaqt) e calcola una geometria prima di esportare STEP."
+                )
+
+        def _action_export_stl(self):
+            """Esporta mesh 3D in formato STL."""
+            vp = self.horn_view._3d_view
+            if hasattr(vp, 'export_stl'):
+                vp.export_stl()    # apre file dialog internamente
+            else:
+                QMessageBox.information(
+                    self, "Export STL",
+                    "Attiva la vista 3D (pyvistaqt) e calcola una geometria prima di esportare STL."
+                )
 
         def _action_new(self):
             self._horn_geometry = None

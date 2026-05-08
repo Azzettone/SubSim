@@ -17,7 +17,7 @@ try:
         QTableWidget, QTableWidgetItem, QHeaderView, QSplitter,
         QTextBrowser, QLineEdit, QFormLayout, QGroupBox, QButtonGroup
     )
-    from PyQt5.QtCore import Qt, pyqtSignal as Signal
+    from PyQt5.QtCore import Qt, QTimer, pyqtSignal as Signal
     from PyQt5.QtGui import QFont
 except ImportError:
     from PySide6.QtWidgets import (
@@ -27,13 +27,13 @@ except ImportError:
         QTableWidget, QTableWidgetItem, QHeaderView, QSplitter,
         QTextBrowser, QLineEdit, QFormLayout, QGroupBox, QButtonGroup
     )
-    from PySide6.QtCore import Qt, Signal
+    from PySide6.QtCore import Qt, QTimer, Signal
     from PySide6.QtGui import QFont
 
 from ..core.constants import (
     SPEAKER_TYPE_SUB, SPEAKER_TYPE_CD, SPEAKER_TYPE_FULLRANGE,
     EXPANSION_TYPES, EXPANSION_LABELS, EXPANSION_EXPONENTIAL, EXPANSION_HYPEX,
-    GEOMETRY_TYPES, GEOMETRY_LABELS, GEOMETRY_STRAIGHT,
+    GEOMETRY_TYPES, GEOMETRY_LABELS, GEOMETRY_STRAIGHT, GEOMETRY_FOLDED, GEOMETRY_2FOLDED,
     ENCLOSURE_CATEGORY_HORN, ENCLOSURE_CATEGORY_REFLEX, ENCLOSURE_CATEGORY_HYBRID,
     ENCLOSURE_CATEGORIES, ENCLOSURE_CATEGORY_LABELS,
     ENCLOSURE_VARIANTS, ENCLOSURE_LABELS,
@@ -250,6 +250,11 @@ class InputPanel(QWidget):
         self._selected_hf_driver: DriverModel = None   # secondo driver per FULLRANGE
         self._enclosure_category = ENCLOSURE_CATEGORY_HORN
         self._enclosure_type = ENCLOSURE_VARIANTS[ENCLOSURE_CATEGORY_HORN][0]
+        # MVC: riferimento al modello (opzionale, iniettato dopo __init__)
+        self._model = None
+        self._rebuild_timer = QTimer(self)
+        self._rebuild_timer.setSingleShot(True)
+        self._rebuild_timer.setInterval(200)   # ms debounce
         self._build_ui()
 
     # ── Utility ───────────────────────────────────────────────────────────────
@@ -596,6 +601,7 @@ class InputPanel(QWidget):
         self.geometry_combo.currentIndexChanged.connect(
             lambda: self.geometry_changed.emit(self.geometry_combo.currentData())
         )
+        self.geometry_combo.currentIndexChanged.connect(self._schedule_model_sync)
         horn_type_layout.addWidget(self.geometry_combo, 0, 1)
         self.gb_horn_type = self._group("TIPO TROMBA", horn_type_layout)
         vbox.addWidget(self.gb_horn_type)
@@ -763,6 +769,15 @@ class InputPanel(QWidget):
         self.calc_btn.clicked.connect(self._on_calculate)
         outer.addWidget(self.calc_btn)
 
+        # ── Connessioni live a model (debounced) ─────────────────────────
+        for _sp in (self.fc_spin, self._hypex_t_spin, self.ratio_spin,
+                    self.compression_spin):
+            _sp.valueChanged.connect(self._schedule_model_sync)
+        self.n_sections_spin.valueChanged.connect(self._schedule_model_sync)
+        for _sp in (self.ext_width_spin, self.ext_height_spin,
+                    self.ext_depth_spin, self.wood_thickness_spin):
+            _sp.valueChanged.connect(self._schedule_model_sync)
+
         # ── Popolamento iniziale ──────────────────────────────────────────
         self._refresh_variant_combo()
         self._update_section_visibility()
@@ -828,6 +843,7 @@ class InputPanel(QWidget):
     def _on_type_changed(self):
         """Cambio tipo speaker (SUB / CD / FULLRANGE)."""
         speaker_type = self.type_combo.currentData()
+        self._schedule_model_sync()
         if speaker_type == SPEAKER_TYPE_CD:
             self.fc_spin.setValue(500.0)
             self.compression_spin.setValue(4.0)
@@ -880,6 +896,7 @@ class InputPanel(QWidget):
         self._hypex_t_label.setVisible(is_hypex)
         self._hypex_t_spin.setVisible(is_hypex)
         self.expansion_combo.setToolTip(self._EXPANSION_INFO.get(exp, ""))
+        self._schedule_model_sync()
 
     def _on_port_type_changed(self):
         """Mostra campo diametro o dimensioni slot."""
@@ -971,6 +988,7 @@ class InputPanel(QWidget):
             f"SPL={driver.spl_1w_1m:.1f}dB  {driver.power_rms:.0f}W"
         )
         self.driver_changed.emit(driver)
+        self._schedule_model_sync()
 
     # ── HF driver (Fullrange) ─────────────────────────────────────────────────
 
@@ -1022,6 +1040,64 @@ class InputPanel(QWidget):
             self.calculate_requested.emit({"error": "no_hf_driver"})
             return
         self.calculate_requested.emit(self.get_params())
+        # MVC: sincronizza il modello e forza rebuild con solidi 3D
+        if self._model is not None:
+            self._sync_model_state()
+            self._model.auto_rebuild_solids = True
+            self._model.rebuild()
+
+    # ── MVC: integrazione AssemblyModel ──────────────────────────────────────
+
+    def set_model(self, model) -> None:
+        """
+        Inietta l'AssemblyModel (MVC). Chiamare dopo __init__.
+        Alla chiamata sincronizza lo stato corrente dell'UI nel modello.
+        """
+        self._model = model
+        self._rebuild_timer.timeout.connect(self._sync_model_state)
+        # Sync iniziale (senza generare solidi — solo parametri)
+        prev_auto = model.auto_rebuild_solids
+        model.auto_rebuild_solids = False
+        try:
+            self._sync_model_state()
+        finally:
+            model.auto_rebuild_solids = prev_auto
+
+    def _schedule_model_sync(self) -> None:
+        """Avvia il timer debounce; resetta se già attivo."""
+        if self._model is None:
+            return
+        self._rebuild_timer.start()   # restart on every call
+
+    def _sync_model_state(self) -> None:
+        """Sincronizza UI → AssemblyModel (senza ricostruire i solidi 3D)."""
+        m = self._model
+        if m is None:
+            return
+        prev_auto = m.auto_rebuild_solids
+        m.auto_rebuild_solids = False
+        try:
+            m.set_speaker_type(self.type_combo.currentData() or SPEAKER_TYPE_SUB)
+            m.set_geometry_type(self.geometry_combo.currentData() or GEOMETRY_STRAIGHT)
+            m.set_driver(self._selected_driver)
+            m.update_horn_params(
+                cutoff_frequency=self.fc_spin.value(),
+                expansion=self.expansion_combo.currentData() or EXPANSION_HYPEX,
+                hypex_T=self._hypex_t_spin.value(),
+                n_sections=int(self.n_sections_spin.value()),
+            )
+            t_m = self.wood_thickness_spin.value() / 1000.0
+            w_mm = self.ext_width_spin.value()
+            h_mm = self.ext_height_spin.value()
+            d_mm = self.ext_depth_spin.value()
+            m.update_chamber_params(
+                width=(w_mm / 1000.0) if w_mm > 0 else 0.60,
+                height=(h_mm / 1000.0) if h_mm > 0 else 0.60,
+                depth=(d_mm / 1000.0) if d_mm > 0 else 0.50,
+                panel_thickness=t_m,
+            )
+        finally:
+            m.auto_rebuild_solids = prev_auto
 
     # ── API pubblica ──────────────────────────────────────────────────────────
 
