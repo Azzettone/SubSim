@@ -321,11 +321,12 @@ class Viewport3DWidget(QWidget):
         self._plotter.clear()
         self._plotter.add_axes(interactive=False)
 
+        n_added = 0
         for name, solid in self._solids.items():
             if solid is None:
                 continue
             mesh = self._solid_to_mesh(solid)
-            if mesh is None:
+            if mesh is None or mesh.n_points == 0:
                 continue
             color = _COLORS.get(name, _DEFAULT_COLOR)
             opacity = _OPACITY.get(name, 0.8)
@@ -338,11 +339,21 @@ class Viewport3DWidget(QWidget):
                 show_edges=self._wireframe_mode,
                 label=name,
             )
+            n_added += 1
 
+        # CRUCIALE: senza reset_camera la scena resta vuota in viewport.
+        if n_added > 0:
+            self._plotter.reset_camera()
+            self._plotter.view_isometric()
         self._plotter.render()
 
     def _solid_to_mesh(self, solid):
-        """Converte solid build123d → pyvista PolyData via STL temporaneo."""
+        """Converte solid build123d → pyvista PolyData via STL temporaneo.
+
+        I solidi sono in metri ma vengono scalati a mm per l'export STL
+        (tolleranza tessellazione è in mm). Pyvista poi li riscala
+        visivamente: l'unità visualizzata sarà mm.
+        """
         try:
             import pyvista as pv
             from btk_speaker_designer.geometry import export_stl as _exp_stl
@@ -350,15 +361,16 @@ class Viewport3DWidget(QWidget):
             with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
                 tmp = f.name
             try:
-                _exp_stl(solid, tmp, scale_to_mm=False)
-                return pv.read(tmp)
+                _exp_stl(solid, tmp, scale_to_mm=True)
+                mesh = pv.read(tmp)
+                return mesh
             finally:
                 try:
                     os.unlink(tmp)
                 except OSError:
                     pass
         except Exception as exc:
-            warnings.warn(f"Viewport3DWidget: mesh conversion failed: {exc}",
+            warnings.warn(f"Viewport3DWidget: mesh conversion failed for solid: {exc}",
                           stacklevel=2)
             return None
 

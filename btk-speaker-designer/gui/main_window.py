@@ -207,9 +207,9 @@ if PYQT_AVAILABLE:
             self.input_panel.setMinimumWidth(410)
             self.hsplit.addWidget(self.input_panel)
 
-            # Area grafica destra: 4 tab (TOP / FRONT / SIDE / 3D)
-            from .horn_view_tabs import HornViewTabs
-            self.horn_view = HornViewTabs(self)
+            # Area grafica destra: viewport 3D PyVista a tutto pannello
+            from .viewport_widget import Viewport3DWidget
+            self.horn_view = Viewport3DWidget(self)
             self.hsplit.addWidget(self.horn_view)
             self.hsplit.setSizes([430, 870])
 
@@ -226,13 +226,14 @@ if PYQT_AVAILABLE:
             from .assembly_model import AssemblyModel
             self.model = AssemblyModel(self)
             self.input_panel.set_model(self.model)
-            self.horn_view.set_model(self.model)
+            # Connetti il modello al viewport: ad ogni rebuild dei solidi
+            # il viewport si aggiorna automaticamente.
+            self.model.solids_rebuilt.connect(self.horn_view.update_from_solids)
 
             # ── Connessione segnali (vecchio pipeline + MVC bridge) ─────────
             self.input_panel.calculate_requested.connect(self._on_calculate)
             self.input_panel.driver_changed.connect(self._on_driver_changed)
             self.input_panel.geometry_changed.connect(self._on_geometry_changed)
-            self.horn_view.sections_modified.connect(self._on_sections_modified)
 
         def _build_status_bar(self):
             self.status_bar = QStatusBar()
@@ -339,8 +340,12 @@ if PYQT_AVAILABLE:
             except Exception as e:
                 self.status_bar.showMessage(f"Avviso simulazione: {e}")
 
-            # 4. Aggiorna tutti i widget
-            self.horn_view.update_horn(self._horn_geometry, self._cabinet_geometry)
+            # 4. Aggiorna tutti i widget (3D viewport: aggiornato via MVC)
+            # Forza sync immediata del modello per garantire coerenza viewport.
+            try:
+                self.input_panel._sync_model_state()
+            except Exception:
+                pass
             self.analysis_tabs.update_all(
                 self._horn_geometry, self._cabinet_geometry, driver, wood_price,
                 simulation=simulation
@@ -418,13 +423,12 @@ if PYQT_AVAILABLE:
             self._cabinet_geometry = None
             self._driver = lf_driver
 
-            # Aggiorna visualizzazione 2D/3D con la tromba LF
+            # Aggiorna visualizzazione 3D con la tromba LF (via MVC)
             if system.lf_horn is not None:
                 from ..core.geometry import design_straight_horn
                 try:
                     cab = design_straight_horn(system.lf_horn)
                     self._cabinet_geometry = cab
-                    self.horn_view.update_horn(system.lf_horn, cab)
                 except Exception:
                     pass
 
@@ -498,8 +502,6 @@ if PYQT_AVAILABLE:
             )
             # Aggiorna i tab di analisi con la risposta reflex/bandpass
             self.analysis_tabs.update_reflex(result, driver)
-            # Aggiorna la visualizzazione 2D/3D con il render del cabinet
-            self.horn_view.update_reflex(result, driver)
 
         def _on_sections_modified(self, custom_sections: list):
             """
@@ -551,7 +553,6 @@ if PYQT_AVAILABLE:
                 else:
                     self._cabinet_geometry = design_straight_horn(self._horn_geometry)
 
-                self.horn_view.update_horn(self._horn_geometry, self._cabinet_geometry)
                 wood_price = 30.0  # costo MDF di default €/m²
                 self.analysis_tabs.panel_list_tab.update(self._cabinet_geometry, wood_price)
             except Exception as e:
@@ -602,33 +603,35 @@ if PYQT_AVAILABLE:
         # ── Azioni toolbar ────────────────────────────────────────────────
 
         def _action_export_step(self):
-            """Esporta solido 3D in formato STEP (richiede modello ricostruito)."""
-            vp = self.horn_view._3d_view
+            """Esporta solido 3D in formato STEP."""
+            vp = self.horn_view
             if hasattr(vp, 'export_step'):
                 vp.export_step()   # apre file dialog internamente
             else:
                 QMessageBox.information(
                     self, "Export STEP",
-                    "Attiva la vista 3D (pyvistaqt) e calcola una geometria prima di esportare STEP."
+                    "Calcola una geometria prima di esportare STEP."
                 )
 
         def _action_export_stl(self):
             """Esporta mesh 3D in formato STL."""
-            vp = self.horn_view._3d_view
+            vp = self.horn_view
             if hasattr(vp, 'export_stl'):
                 vp.export_stl()    # apre file dialog internamente
             else:
                 QMessageBox.information(
                     self, "Export STL",
-                    "Attiva la vista 3D (pyvistaqt) e calcola una geometria prima di esportare STL."
+                    "Calcola una geometria prima di esportare STL."
                 )
 
         def _action_new(self):
             self._horn_geometry = None
             self._cabinet_geometry = None
             self._driver = None
-            if MATPLOTLIB_AVAILABLE_GUARD():
-                self.horn_view._draw_placeholder()
+            try:
+                self.horn_view.clear()
+            except Exception:
+                pass
             self.status_bar.showMessage(
                 "Nuovo progetto  —  Seleziona un driver e premi  ⚙ Calcola."
             )
