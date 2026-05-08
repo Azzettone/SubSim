@@ -1033,6 +1033,9 @@ class InputPanel(QWidget):
 
     def _on_calculate(self):
         speaker_type = self.type_combo.currentData()
+        print(f"[InputPanel] _on_calculate: type={speaker_type} "
+              f"driver={self._selected_driver is not None} "
+              f"model={self._model is not None}")
         if self._selected_driver is None:
             self.calculate_requested.emit({"error": "no_driver"})
             return
@@ -1042,9 +1045,13 @@ class InputPanel(QWidget):
         self.calculate_requested.emit(self.get_params())
         # MVC: sincronizza il modello e forza rebuild con solidi 3D
         if self._model is not None:
+            print("[InputPanel] _on_calculate: forcing model.rebuild() with auto_rebuild_solids=True")
             self._sync_model_state()
             self._model.auto_rebuild_solids = True
-            self._model.rebuild()
+            ok = self._model.rebuild()
+            print(f"[InputPanel] _on_calculate: model.rebuild() returned {ok}")
+        else:
+            print("[InputPanel] _on_calculate: model is None — viewport will NOT update")
 
     # ── MVC: integrazione AssemblyModel ──────────────────────────────────────
 
