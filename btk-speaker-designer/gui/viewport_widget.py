@@ -214,6 +214,14 @@ class Viewport3DWidget(QWidget):
         Args:
             solids: {name: build123d Solid} — da AssemblyModel.solids_rebuilt
         """
+        # Diagnostica: stampa sempre, anche se il viewport non è disponibile.
+        try:
+            keys = list(solids.keys()) if solids else []
+            non_none = [k for k, v in (solids or {}).items() if v is not None]
+            print(f"[Viewport3D] update_from_solids: keys={keys} non_none={non_none} "
+                  f"pyvista_ok={self._has_pyvistaqt} plotter={self._plotter is not None}")
+        except Exception as e:
+            print(f"[Viewport3D] update_from_solids print failed: {e}")
         if not self._has_pyvistaqt or self._plotter is None:
             return
         self._solids = dict(solids)
@@ -327,7 +335,10 @@ class Viewport3DWidget(QWidget):
                 continue
             mesh = self._solid_to_mesh(solid)
             if mesh is None or mesh.n_points == 0:
+                print(f"[Viewport3D]   - skip {name!r}: mesh None or empty")
                 continue
+            print(f"[Viewport3D]   + add {name!r}: pts={mesh.n_points} "
+                  f"bounds={tuple(round(b,3) for b in mesh.bounds)}")
             color = _COLORS.get(name, _DEFAULT_COLOR)
             opacity = _OPACITY.get(name, 0.8)
             style = "wireframe" if self._wireframe_mode else "surface"
@@ -345,6 +356,8 @@ class Viewport3DWidget(QWidget):
         if n_added > 0:
             self._plotter.reset_camera()
             self._plotter.view_isometric()
+        else:
+            print("[Viewport3D] _render_solids: NESSUN solido aggiunto alla scena")
         self._plotter.render()
 
     def _solid_to_mesh(self, solid):
@@ -370,6 +383,9 @@ class Viewport3DWidget(QWidget):
                 except OSError:
                     pass
         except Exception as exc:
+            import traceback
+            print(f"[Viewport3D] _solid_to_mesh FAILED: {exc}")
+            traceback.print_exc()
             warnings.warn(f"Viewport3DWidget: mesh conversion failed for solid: {exc}",
                           stacklevel=2)
             return None

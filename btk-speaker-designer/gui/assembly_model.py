@@ -406,6 +406,8 @@ class AssemblyModel(QObject):
                               stacklevel=2)
 
         self._solids_cache = solids
+        print(f"[AssemblyModel] rebuild_solids: generati {len(solids)} solidi: "
+              f"{[k for k,v in solids.items() if v is not None]}")
         self.solids_rebuilt.emit(dict(solids))
         return dict(solids)
 
