@@ -564,10 +564,40 @@ if PYQT_AVAILABLE:
                 return
             h = m.horn_block
             self.status_bar.showMessage(
-                f"[Model] Fc={h.cutoff_frequency_hz:.0f} Hz  │  "
-                f"L={h.horn_length_m*100:.1f} cm  │  "
-                f"m={h.flare_rate_m:.4f} m⁻¹  │  {m.speaker_type}"
+                f"[Model] Fc={h.cutoff_frequency:.0f} Hz  │  "
+                f"L={h.length*100:.1f} cm  │  "
+                f"m={h.flare_rate:.4f} m⁻¹  │  {m.speaker_type}"
             )
+            self._refresh_analysis_from_model()
+
+        def _refresh_analysis_from_model(self):
+            """
+            B (MVC): aggiorna AnalysisTabs leggendo i blocchi correnti del
+            modello. Esegue il simulation_engine sulla HornGeometry derivata
+            dal HornBlock per riempire SPL / Phase / Impedance.
+            """
+            m = self.model
+            geom = m.to_horn_geometry()
+            if geom is None or m.driver is None:
+                return
+            try:
+                from ..core.simulation_engine import simulate
+                from shared.acoustic_core import speed_of_sound
+                c = speed_of_sound(16.8)
+                sim = simulate(geom, m.driver, input_power_w=1.0, c=c)
+                self._horn_geometry = geom
+                self._driver = m.driver
+                self._last_simulation = sim
+                self.analysis_tabs.update_from_simulation(
+                    sim, horn_geometry=geom, driver=m.driver
+                )
+                # Panel list dal cabinet legacy se esiste
+                if self._cabinet_geometry is not None:
+                    self.analysis_tabs.panel_list_tab.update(
+                        self._cabinet_geometry, 30.0
+                    )
+            except Exception as exc:
+                self.status_bar.showMessage(f"[Model] simulazione fallita: {exc}")
 
         # ── Azioni toolbar ────────────────────────────────────────────────
 

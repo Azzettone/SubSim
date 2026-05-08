@@ -319,16 +319,20 @@ class AssemblyModel(QObject):
                 self.validation_failed.emit(f"DriverBlock: {exc}")
                 driver_block = None
 
-            # Assembly (semplice: solo registriamo i blocchi, le connessioni
-            # topologiche le faremo nello step successivo della migrazione)
+            # Assembly + topologia (driver ↔ horn ↔ chamber ↔ port).
             assembly = Assembly(name="Project")
-            assembly.add(horn)
-            if chamber is not None:
-                assembly.add(chamber)
-            if port is not None:
-                assembly.add(port)
-            if driver_block is not None:
-                assembly.add(driver_block)
+            horn_id = assembly.add(horn)
+            chamber_id = assembly.add(chamber) if chamber is not None else None
+            port_id = assembly.add(port) if port is not None else None
+            driver_id = assembly.add(driver_block) if driver_block is not None else None
+
+            self._apply_topology(
+                assembly,
+                horn_id=horn_id,
+                chamber_id=chamber_id,
+                port_id=port_id,
+                driver_id=driver_id,
+            )
 
             self._horn_block = horn
             self._chamber_block = chamber
@@ -410,6 +414,87 @@ class AssemblyModel(QObject):
         """Se è disponibile un driver, ricostruisce automaticamente."""
         if self._driver is not None:
             self.rebuild()
+
+    def _apply_topology(
+        self,
+        assembly: Assembly,
+        *,
+        horn_id: Optional[str],
+        chamber_id: Optional[str],
+        port_id: Optional[str],
+        driver_id: Optional[str],
+    ) -> None:
+        """
+        Crea connessioni topologiche standard tra i blocchi:
+
+        * driver.front ↔ horn.throat   (driver carica la tromba)
+        * driver.back  ↔ chamber.front  (rear chamber sigillata)
+        * port.inner   ↔ chamber.back   (porta reflex sul retro camera)
+
+        Errori non bloccanti: se una porta non esiste o è già in uso
+        emette ``validation_failed`` ma prosegue (assembly resta valido).
+        """
+        def _try_connect(a_id: str, a_port: str, b_id: str, b_port: str) -> None:
+            try:
+                assembly.connect(a_id, a_port, b_id, b_port)
+            except (KeyError, ValueError) as exc:
+                self.validation_failed.emit(
+                    f"connect {a_id}.{a_port} ↔ {b_id}.{b_port}: {exc}"
+                )
+
+        if driver_id is not None and horn_id is not None:
+            _try_connect(driver_id, "front", horn_id, "throat")
+        if driver_id is not None and chamber_id is not None:
+            _try_connect(driver_id, "back", chamber_id, "front")
+        if port_id is not None and chamber_id is not None:
+            _try_connect(port_id, "inner", chamber_id, "back")
+
+    def to_horn_geometry(self):
+        """
+        Converte il ``HornBlock`` corrente in un ``HornGeometry`` legacy
+        (compatibile con simulation_engine, analysis_tabs, exporters).
+
+        Ritorna ``None`` se non c'è ancora un horn_block valido.
+        """
+        from btk_speaker_designer.core.constants import (
+            AIR_DENSITY, SPEED_OF_SOUND,
+        )
+        from btk_speaker_designer.core.horn_calculator import (
+            HornGeometry, HornSection,
+        )
+        import numpy as np
+
+        h = self._horn_block
+        if h is None:
+            return None
+
+        throat_imp = (AIR_DENSITY * SPEED_OF_SOUND) / max(h.throat_area, 1e-12)
+        sections_legacy = []
+        n = max(len(h.sections) - 1, 1)
+        for i, s in enumerate(h.sections):
+            r = float(np.sqrt(s.area / np.pi))
+            sections_legacy.append(
+                HornSection(
+                    position=i / n,
+                    x_m=float(s.x_axial),
+                    area_m2=float(s.area),
+                    radius_m=r,
+                    width_m=float(s.width),
+                    height_m=float(s.height),
+                )
+            )
+        return HornGeometry(
+            throat_area_m2=float(h.throat_area),
+            mouth_area_m2=float(h.mouth_area),
+            horn_length_m=float(h.length),
+            flare_rate_m=float(h.flare_rate),
+            cutoff_frequency_hz=float(h.cutoff_frequency),
+            throat_impedance=float(throat_imp),
+            coupling_volume_m3=float(h.internal_volume),
+            expansion_type=h.expansion,
+            sections=sections_legacy,
+            hypex_T=float(h.hypex_T),
+        )
 
     def _reset_blocks(self) -> None:
         self._horn_block = None

@@ -218,3 +218,72 @@ class TestSolids:
         m.set_driver(driver_18)   # → rebuild() → rebuild_solids()
         assert len(received) == 1
         assert "horn_cavity" in received[0]
+
+
+# ---------------------------------------------------------------------------
+# Topologia connessioni (Step C)
+# ---------------------------------------------------------------------------
+class TestTopology:
+    def test_driver_to_horn_connected(self, model, driver_18):
+        model.set_driver(driver_18)
+        assert model.has_valid_assembly()
+        conns = model.assembly.connections
+        # Almeno una connessione driver.front ↔ horn.throat
+        pairs = {(c.port_a, c.port_b) for c in conns} | \
+                {(c.port_b, c.port_a) for c in conns}
+        assert ("front", "throat") in pairs
+
+    def test_driver_to_chamber_connected(self, model, driver_18):
+        model.set_driver(driver_18)
+        # chamber abilitato di default
+        ports = [(c.port_a, c.port_b) for c in model.assembly.connections]
+        ports_flat = {p for pair in ports for p in pair}
+        assert "back" in ports_flat   # driver.back o chamber.back
+
+    def test_no_chamber_no_chamber_connection(self, model, driver_18):
+        model.update_chamber_params(enabled=False)
+        model.set_driver(driver_18)
+        # Solo driver↔horn
+        conns = model.assembly.connections
+        assert len(conns) == 1
+
+
+# ---------------------------------------------------------------------------
+# Conversione legacy HornGeometry (Step B)
+# ---------------------------------------------------------------------------
+class TestToHornGeometry:
+    def test_returns_none_without_horn(self, model):
+        assert model.to_horn_geometry() is None
+
+    def test_basic_fields(self, model, driver_18):
+        model.set_driver(driver_18)
+        geom = model.to_horn_geometry()
+        assert geom is not None
+        assert geom.cutoff_frequency_hz == pytest.approx(
+            model.horn_params.cutoff_frequency
+        )
+        assert geom.expansion_type == model.horn_params.expansion
+        assert geom.horn_length_m > 0
+        assert geom.flare_rate_m > 0
+        assert geom.throat_area_m2 > 0
+        assert geom.mouth_area_m2 > geom.throat_area_m2
+        assert len(geom.sections) >= 2
+
+    def test_section_monotonic(self, model, driver_18):
+        model.set_driver(driver_18)
+        geom = model.to_horn_geometry()
+        xs = [s.x_m for s in geom.sections]
+        areas = [s.area_m2 for s in geom.sections]
+        # x e area monotone non-decrescenti
+        assert all(b >= a - 1e-9 for a, b in zip(xs, xs[1:]))
+        assert all(b >= a - 1e-9 for a, b in zip(areas, areas[1:]))
+
+    def test_simulation_engine_accepts_geometry(self, model, driver_18):
+        from btk_speaker_designer.core.simulation_engine import simulate
+        model.set_driver(driver_18)
+        geom = model.to_horn_geometry()
+        sim = simulate(geom, driver_18, input_power_w=1.0)
+        assert sim is not None
+        assert len(sim.frequencies) > 0
+        assert len(sim.spl_db) == len(sim.frequencies)
+
