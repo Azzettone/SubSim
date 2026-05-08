@@ -20,27 +20,55 @@ sys.path.insert(0, str(_ROOT_DIR))
 
 def _bootstrap_package():
     """
-    Registra 'btk-speaker-designer/' come pacchetto Python 'btk_speaker_designer'
-    in sys.modules. Questo è necessario perché il nome della directory contiene
-    un trattino, che non è un identificatore Python valido, ma i file al suo
-    interno usano import relativi (from ..core.X) che richiedono un pacchetto padre.
+    Rende 'btk_speaker_designer' importabile anche quando lanciato direttamente
+    come script (python btk_speaker_designer/main.py).
+
+    Se il pacchetto è già in sys.modules (es: python -m btk_speaker_designer)
+    non fa niente — lascia che l'import normale di Python gestisca tutto.
     """
     if _PKG_NAME in sys.modules:
-        return
+        return   # pacchetto già caricato correttamente, nulla da fare
 
-    def _reg(name: str, path: Path):
-        if name not in sys.modules:
-            m = types.ModuleType(name)
-            m.__path__ = [str(path)]
-            m.__package__ = name
-            m.__name__ = name
-            sys.modules[name] = m
+    # Controlla se è un vero pacchetto Python (ha __init__.py)
+    init_file = _PKG_DIR / "__init__.py"
+    if init_file.exists():
+        # Carica il pacchetto reale tramite importlib invece di creare un modulo sintetico
+        import importlib.util as _ilu
+        for sub in ["", ".core", ".gui", ".database", ".exporters"]:
+            full_name = _PKG_NAME + sub
+            if full_name in sys.modules:
+                continue
+            sub_dir = _PKG_DIR if sub == "" else (_PKG_DIR / sub.lstrip("."))
+            init = sub_dir / "__init__.py"
+            if not init.exists():
+                continue
+            spec = _ilu.spec_from_file_location(full_name, str(init),
+                                                submodule_search_locations=[str(sub_dir)])
+            if spec is None:
+                continue
+            mod = _ilu.module_from_spec(spec)
+            mod.__path__ = [str(sub_dir)]
+            mod.__package__ = full_name
+            sys.modules[full_name] = mod
+            try:
+                spec.loader.exec_module(mod)
+            except Exception:
+                pass  # __init__.py può essere vuoto o avere import opzionali
+    else:
+        # Directory con trattino: usa moduli sintetici (btk-speaker-designer)
+        def _reg(name: str, path: Path):
+            if name not in sys.modules:
+                m = types.ModuleType(name)
+                m.__path__ = [str(path)]
+                m.__package__ = name
+                m.__name__ = name
+                sys.modules[name] = m
 
-    _reg(_PKG_NAME,                    _PKG_DIR)
-    _reg(f"{_PKG_NAME}.core",          _PKG_DIR / "core")
-    _reg(f"{_PKG_NAME}.gui",           _PKG_DIR / "gui")
-    _reg(f"{_PKG_NAME}.database",      _PKG_DIR / "database")
-    _reg(f"{_PKG_NAME}.exporters",     _PKG_DIR / "exporters")
+        _reg(_PKG_NAME,               _PKG_DIR)
+        _reg(f"{_PKG_NAME}.core",     _PKG_DIR / "core")
+        _reg(f"{_PKG_NAME}.gui",      _PKG_DIR / "gui")
+        _reg(f"{_PKG_NAME}.database", _PKG_DIR / "database")
+        _reg(f"{_PKG_NAME}.exporters",_PKG_DIR / "exporters")
 
 
 _bootstrap_package()
@@ -151,7 +179,8 @@ def run_demo():
     return 0
 
 
-if __name__ == "__main__":
+def main():
+    """Entrypoint pubblico (usato da __main__.py e da python -m btk_speaker_designer)."""
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -172,3 +201,7 @@ if __name__ == "__main__":
         sys.exit(run_demo())
     else:
         sys.exit(run_gui())
+
+
+if __name__ == "__main__":
+    main()

@@ -254,85 +254,154 @@ class PhaseMagnitudeTab(QWidget):
 
     def _draw_from_simulation(self, sim):
         """
-        Layout 2 pannelli:
-          Pannello 1: Magnitudine (linea continua, asse Y sinistro, dB)
-                    + Fase (linea tratteggiata, asse Y destro, °)
-                    — entrambi con smoothing 1/6 ottava
-          Pannello 2: Ritardo di gruppo (ms)
+        Layout 3 pannelli:
+          Pannello 1: SPL (dB) — curva sistema + guadagno tromba TMM + SPL grezzo
+          Pannello 2: Fase totale (°) + fase tromba (twin Y)
+          Pannello 3: Ritardo di gruppo (ms)
+
+        Il pannello SPL mostra:
+          - Linea sottile/semi-trasparente: SPL grezzo (rivela ripple TMM / risonanze tromba)
+          - Linea principale (1/6 oct): risposta sistema totale normalizzata
+          - Linea tratteggiata (1/6 oct): guadagno tromba riferito al livello di passband
+            (evidenzia come i diversi profili tromba modellano la risposta)
+          - Linea rossa puntata (1/6 oct): perdite strato limite BL (Kirchhoff 1868)
         """
         self.fig.clear()
         freqs = sim.frequencies
         fc    = self._horn_geometry.cutoff_frequency_hz if self._horn_geometry else 70.0
 
-        # ── Pannello 1: Magnitudine + Fase ───────────────────────────────
-        ax_mag = self.fig.add_subplot(211)
-        ax_pha = ax_mag.twinx()   # asse Y destro per la fase
-
         driver_label = ""
         if self._driver:
             driver_label = f" — {self._driver.manufacturer} {self._driver.model}"
-        ax_mag.set_title(
-            f"Magnitudine + Fase (1/6 oct){driver_label}",
-            color=C_TEXT, fontsize=10, pad=8
-        )
 
-        # Smoothing 1/6 ottava
-        spl_smooth   = _smooth_1_6_oct(freqs, sim.spl_db)
-        phase_smooth = _smooth_1_6_oct(freqs, sim.phase_deg)
+        # Smoothing 1/6 ottava per le curve principali
+        spl_smooth    = _smooth_1_6_oct(freqs, sim.spl_db)
+        phase_smooth  = _smooth_1_6_oct(freqs, sim.phase_deg)
+        horn_smooth   = _smooth_1_6_oct(freqs, sim.horn_gain_db)
+        bl_smooth     = _smooth_1_6_oct(freqs, sim.bl_loss_db)
 
-        # Magnitudine — linea continua (asse sinistro)
-        ln_spl, = ax_mag.semilogx(freqs, spl_smooth,
-                                   color=C_BLUE, linewidth=2.0,
-                                   label="SPL (1/6 oct)")
-        ax_mag.set_facecolor(C_AX)
-        ax_mag.set_xlabel("", color=C_SUBTLE, fontsize=9)
-        ax_mag.set_ylabel("SPL (dB)", color=C_BLUE, fontsize=9)
-        ax_mag.tick_params(axis="y", colors=C_BLUE, labelsize=8)
-        ax_mag.tick_params(axis="x", colors=C_SUBTLE, labelsize=8)
-        for sp in ax_mag.spines.values():
+        # ── Pannello 1: SPL + guadagno tromba + perdite BL ───────────────
+        ax_spl = self.fig.add_subplot(311)
+        ax_spl.set_facecolor(C_AX)
+        ax_spl.set_title(f"SPL — driver + tromba (TMM){driver_label}",
+                         color=C_TEXT, fontsize=10, pad=8)
+        ax_spl.set_ylabel("SPL (dB)", color=C_TEXT, fontsize=9)
+        ax_spl.tick_params(axis="x", colors=C_SUBTLE, labelsize=8)
+        ax_spl.tick_params(axis="y", colors=C_SUBTLE, labelsize=8)
+        for sp in ax_spl.spines.values():
             sp.set_color(C_GRID)
-        ax_mag.grid(True, color=C_GRID, linewidth=0.5, alpha=0.8)
-        ax_mag.spines["left"].set_color(C_BLUE)
+        ax_spl.grid(True, color=C_GRID, linewidth=0.5, alpha=0.8)
 
-        spl_max = np.nanmax(spl_smooth)
-        spl_min = max(spl_max - 50.0, np.nanmin(spl_smooth))
-        ax_mag.set_xlim(20, 20000)
-        ax_mag.set_ylim(spl_min - 3, spl_max + 3)
+        # SPL grezzo (fine, semi-trasparente) — mostra ripple TMM reale
+        ax_spl.semilogx(freqs, sim.spl_db,
+                        color=C_BLUE, linewidth=0.6, alpha=0.22)
 
-        # Fase — linea tratteggiata (asse destro)
-        ln_pha, = ax_pha.semilogx(freqs, phase_smooth,
-                                   color=C_PURPLE, linewidth=1.6,
-                                   linestyle="--", label="Fase (1/6 oct)")
-        ax_pha.set_ylabel("Fase (°)", color=C_PURPLE, fontsize=9)
-        ax_pha.tick_params(axis="y", colors=C_PURPLE, labelsize=8)
-        ax_pha.spines["right"].set_color(C_PURPLE)
-        ax_pha.set_xlim(20, 20000)
+        # SPL con smoothing 1/6 oct — curva principale
+        ax_spl.semilogx(freqs, spl_smooth,
+                        color=C_BLUE, linewidth=2.2, label="SPL sistema (1/6 oct)")
 
-        # Linea Fc
-        ax_mag.axvline(x=fc, color=C_ORANGE, linewidth=1.0, linestyle=":",
-                       alpha=0.7, label=f"Fc={fc:.0f}Hz")
+        # Guadagno tromba TMM — offset al livello passband SPL per confronto visivo
+        passband_mask = freqs > fc * 1.5
+        if np.any(passband_mask):
+            spl_ref  = float(np.nanmean(spl_smooth[passband_mask]))
+            horn_ref = float(np.nanmean(horn_smooth[passband_mask]))
+        else:
+            spl_ref  = float(np.nanmean(spl_smooth))
+            horn_ref = float(np.nanmean(horn_smooth))
+        horn_shifted = horn_smooth + (spl_ref - horn_ref)
+        ax_spl.semilogx(freqs, horn_shifted,
+                        color=C_ORANGE, linewidth=1.5, linestyle="--", alpha=0.85,
+                        label="Guadagno tromba TMM (shape)")
 
-        # Legenda combinata
-        lines  = [ln_spl, ln_pha]
-        labels = [l.get_label() for l in lines]
-        ax_mag.legend(lines, labels, fontsize=7.5, framealpha=0.35,
-                      facecolor=C_BG, edgecolor=C_GRID, labelcolor=C_TEXT,
-                      loc="lower right")
+        # Perdite strato limite (Kirchhoff) — invertite per mostrare "quanto si perde"
+        if np.nanmax(bl_smooth) > 0.05:
+            bl_shifted = spl_smooth - bl_smooth     # mostra la "sottrazione"
+            ax_spl.semilogx(freqs, bl_shifted,
+                            color=C_RED, linewidth=1.0, linestyle=":",
+                            alpha=0.7, label="SPL senza perdite BL")
 
-        # Info fisica compatta
+        ax_spl.axvline(x=fc, color=C_ORANGE, linewidth=1.0, linestyle=":",
+                       alpha=0.7, label=f"Fc = {fc:.0f} Hz")
+
+        spl_max = float(np.nanmax(spl_smooth))
+        spl_min = max(spl_max - 55.0, float(np.nanmin(spl_smooth)))
+        ax_spl.set_xlim(20, 20000)
+        ax_spl.set_ylim(spl_min - 3, spl_max + 3)
+
+        # Info fisica
         info_parts = []
         if sim.boundary_layer_loss_avg_db > 0.01:
-            info_parts.append(f"BL={sim.boundary_layer_loss_avg_db:.2f}dB")
+            info_parts.append(f"BL={sim.boundary_layer_loss_avg_db:.2f} dB")
         if sim.reynolds_throat > 0:
             info_parts.append(f"Re={sim.reynolds_throat:.0f}")
         if sim.goldberg_throat > 0:
             info_parts.append(f"Γ={sim.goldberg_throat:.3f}")
         if info_parts:
-            ax_mag.text(0.01, 0.04, "  ".join(info_parts),
-                        ha="left", va="bottom", transform=ax_mag.transAxes,
+            ax_spl.text(0.01, 0.04, "  ".join(info_parts),
+                        ha="left", va="bottom", transform=ax_spl.transAxes,
                         color=C_SUBTLE, fontsize=7.5)
 
-        # Somma fronte/retro opzionale
+        ax_spl.legend(fontsize=7.5, framealpha=0.35, facecolor=C_BG,
+                      edgecolor=C_GRID, labelcolor=C_TEXT, loc="lower right")
+
+        # ── Pannello 2: Fase + fase tromba (twin Y) ───────────────────────
+        ax_pha = self.fig.add_subplot(312)
+        ax_horn_pha = ax_pha.twinx()
+
+        ax_pha.set_facecolor(C_AX)
+        ax_pha.set_title("Fase totale + contributo tromba",
+                         color=C_TEXT, fontsize=10, pad=8)
+        ax_pha.set_ylabel("Fase totale (°)", color=C_PURPLE, fontsize=9)
+        ax_horn_pha.set_ylabel("Fase tromba (°)", color=C_ORANGE, fontsize=9)
+        ax_pha.tick_params(axis="x", colors=C_SUBTLE, labelsize=8)
+        ax_pha.tick_params(axis="y", colors=C_PURPLE, labelsize=8)
+        ax_horn_pha.tick_params(axis="y", colors=C_ORANGE, labelsize=8)
+        for sp in ax_pha.spines.values():
+            sp.set_color(C_GRID)
+        ax_pha.grid(True, color=C_GRID, linewidth=0.5, alpha=0.8)
+        ax_pha.spines["left"].set_color(C_PURPLE)
+        ax_horn_pha.spines["right"].set_color(C_ORANGE)
+
+        # Fase totale sistema (driver + tromba)
+        ln_pha, = ax_pha.semilogx(freqs, phase_smooth,
+                                   color=C_PURPLE, linewidth=2.0,
+                                   label="Fase sistema (1/6 oct)")
+        ax_pha.axhline(y=0, color=C_GRID, linewidth=0.6, linestyle=":")
+
+        # Fase tromba (contributo TMM isolato)
+        horn_phase_deg_smooth = _smooth_1_6_oct(freqs, np.degrees(sim.horn_phase_rad))
+        ln_horn_pha, = ax_horn_pha.semilogx(
+            freqs, horn_phase_deg_smooth,
+            color=C_ORANGE, linewidth=1.4, linestyle="--", alpha=0.8,
+            label="Fase tromba (TMM)")
+
+        ax_pha.axvline(x=fc, color=C_ORANGE, linewidth=0.8, linestyle=":",
+                       alpha=0.6)
+        ax_pha.set_xlim(20, 20000)
+
+        lines  = [ln_pha, ln_horn_pha]
+        labels = [l.get_label() for l in lines]
+        ax_pha.legend(lines, labels, fontsize=7.5, framealpha=0.35,
+                      facecolor=C_BG, edgecolor=C_GRID, labelcolor=C_TEXT,
+                      loc="lower right")
+
+        # ── Pannello 3: Ritardo di gruppo ─────────────────────────────────
+        ax_gd = self.fig.add_subplot(313)
+        ax_gd.set_facecolor(C_AX)
+        _setup_ax(ax_gd, "Ritardo di gruppo", "Frequenza (Hz)", "GD (ms)")
+
+        gd_raw    = np.clip(sim.group_delay_ms, -20, 50)
+        gd_smooth = _smooth_1_6_oct(freqs, gd_raw)
+        ax_gd.semilogx(freqs, gd_smooth,
+                       color=C_GREEN, linewidth=1.8, label="GD (1/6 oct)")
+        ax_gd.axhline(y=0, color=C_GRID, linewidth=0.6, linestyle=":")
+        ax_gd.axvline(x=fc, color=C_ORANGE, linewidth=0.8, linestyle=":",
+                      alpha=0.6)
+        ax_gd.set_xlim(20, 20000)
+        ax_gd.legend(fontsize=7.5, framealpha=0.35, facecolor=C_BG,
+                     edgecolor=C_GRID, labelcolor=C_TEXT)
+
+        # ── Somma fronte/retro opzionale ──────────────────────────────────
         if self.back_rad_check.isChecked() and self._driver is not None:
             try:
                 from ..core.phase_summing import calculate_combined_response
@@ -346,26 +415,13 @@ class PhaseMagnitudeTab(QWidget):
                 )
                 ref_idx = np.argmin(np.abs(freqs - 1000))
                 offset  = spl_smooth[ref_idx] - result.combined_spl[ref_idx]
-                ax_mag.semilogx(freqs, result.combined_spl + offset,
+                ax_spl.semilogx(freqs, result.combined_spl + offset,
                                 color=C_GREEN, linewidth=1.3, linestyle="-.",
                                 label="Fronte+Retro", alpha=0.8)
+                ax_spl.legend(fontsize=7.5, framealpha=0.35, facecolor=C_BG,
+                              edgecolor=C_GRID, labelcolor=C_TEXT, loc="lower right")
             except Exception:
                 pass
-
-        # ── Pannello 2: Ritardo di gruppo ─────────────────────────────────
-        ax_gd = self.fig.add_subplot(212)
-        ax_gd.set_facecolor(C_AX)
-        _setup_ax(ax_gd, "Ritardo di gruppo", "Frequenza (Hz)", "GD (ms)")
-
-        gd_raw     = np.clip(sim.group_delay_ms, -20, 50)
-        gd_smooth  = _smooth_1_6_oct(freqs, gd_raw)
-        ax_gd.semilogx(freqs, gd_smooth,
-                       color=C_GREEN, linewidth=1.8, label="GD (1/6 oct)")
-        ax_gd.axhline(y=0, color=C_GRID, linewidth=0.6, linestyle=":")
-        ax_gd.axvline(x=fc, color=C_ORANGE, linewidth=1.0, linestyle=":", alpha=0.7)
-        ax_gd.set_xlim(20, 20000)
-        ax_gd.legend(fontsize=7.5, framealpha=0.35, facecolor=C_BG,
-                     edgecolor=C_GRID, labelcolor=C_TEXT)
 
         # ── Warnings ─────────────────────────────────────────────────────
         if sim.warnings:
@@ -374,29 +430,74 @@ class PhaseMagnitudeTab(QWidget):
         else:
             self._warn_label.setText("")
 
-        self.fig.tight_layout(pad=1.2)
+        self.fig.tight_layout(pad=1.0)
         self.canvas.draw()
 
     def _redraw_fallback(self):
-        """Fallback senza driver: vecchio filtro passa-alto."""
-        from ..core.horn_calculator import horn_frequency_response
-        self.fig.clear()
-        ax_mag = self.fig.add_subplot(211)
-        ax_pha = self.fig.add_subplot(212)
-        freqs = np.logspace(np.log10(20), np.log10(20000), 600)
-        amp_db, phase_rad = horn_frequency_response(freqs, self._horn_geometry)
+        """
+        Fallback senza driver: calcola il guadagno TMM della tromba diretta
+        tramite _horn_pressure_gain() del simulation engine — non il vecchio HPF.
+        Mostra gain (dB), fase TMM (°) e impedenza acustica alla gola (Ω acust.).
+        """
+        if self._horn_geometry is None:
+            return
+
+        try:
+            from ..core.simulation_engine import (
+                _horn_pressure_gain, _horn_input_impedance
+            )
+        except ImportError:
+            # Improbabile ma safe
+            return
+
+        freqs = np.logspace(np.log10(20), np.log10(20000), 500)
+        horn_gain_db, horn_phase_rad = _horn_pressure_gain(
+            freqs, self._horn_geometry)
+        Z_throat = _horn_input_impedance(freqs, self._horn_geometry)
         fc = self._horn_geometry.cutoff_frequency_hz
-        _setup_ax(ax_mag, "Risposta tromba (no driver)", "", "Gain (dB)")
-        ax_mag.semilogx(freqs, amp_db, color=C_BLUE, linewidth=1.8)
-        ax_mag.axvline(x=fc, color=C_ORANGE, linewidth=1.2, linestyle="--",
-                       label=f"Fc = {fc:.0f} Hz")
-        ax_mag.set_xlim(20, 20000)
-        ax_mag.legend(fontsize=8, framealpha=0.35, facecolor=C_BG,
-                      edgecolor=C_GRID, labelcolor=C_TEXT)
-        _setup_ax(ax_pha, "Fase", "Frequenza (Hz)", "Fase (°)")
-        ax_pha.semilogx(freqs, np.degrees(phase_rad), color=C_PURPLE, linewidth=1.8)
-        ax_pha.axvline(x=fc, color=C_ORANGE, linewidth=1.2, linestyle="--")
-        ax_pha.set_xlim(20, 20000)
+
+        gain_smooth  = _smooth_1_6_oct(freqs, horn_gain_db)
+        phase_smooth = _smooth_1_6_oct(freqs, np.degrees(horn_phase_rad))
+        z_smooth     = _smooth_1_6_oct(freqs, np.abs(Z_throat))
+
+        self.fig.clear()
+
+        # Pannello superiore: guadagno TMM tromba
+        ax_gain = self.fig.add_subplot(211)
+        _setup_ax(ax_gain, "Guadagno tromba TMM (no driver)", "", "Gain (dB)")
+        ax_gain.semilogx(freqs, horn_gain_db,
+                         color=C_BLUE, linewidth=0.5, alpha=0.2)
+        ax_gain.semilogx(freqs, gain_smooth,
+                         color=C_BLUE, linewidth=2.0, label="Guadagno TMM (1/6 oct)")
+        ax_pha = ax_gain.twinx()
+        ax_pha.semilogx(freqs, phase_smooth,
+                        color=C_PURPLE, linewidth=1.4, linestyle="--", alpha=0.8,
+                        label="Fase TMM (1/6 oct)")
+        ax_pha.set_ylabel("Fase (°)", color=C_PURPLE, fontsize=9)
+        ax_pha.tick_params(axis="y", colors=C_PURPLE, labelsize=8)
+        ax_pha.spines["right"].set_color(C_PURPLE)
+        ax_gain.axvline(x=fc, color=C_ORANGE, linewidth=1.2, linestyle="--",
+                        label=f"Fc = {fc:.0f} Hz")
+        ax_gain.set_xlim(20, 20000)
+        lines  = [ax_gain.lines[-1]] + [ax_pha.lines[0]]
+        ax_gain.legend(fontsize=8, framealpha=0.35, facecolor=C_BG,
+                       edgecolor=C_GRID, labelcolor=C_TEXT)
+        ax_gain.text(0.5, 0.93, "Seleziona un driver per la risposta SPL assoluta",
+                     ha="center", va="top", transform=ax_gain.transAxes,
+                     color=C_SUBTLE, fontsize=8.5)
+
+        # Pannello inferiore: impedenza acustica alla gola
+        ax_z = self.fig.add_subplot(212)
+        _setup_ax(ax_z, "Impedenza acustica gola |Zin| (Pa·s/m³)",
+                  "Frequenza (Hz)", "|Zin| (Pa·s/m³)")
+        ax_z.semilogx(freqs, z_smooth,
+                      color=C_GREEN, linewidth=1.8, label="|Zin| gola (1/6 oct)")
+        ax_z.axvline(x=fc, color=C_ORANGE, linewidth=1.0, linestyle="--",
+                     alpha=0.7)
+        ax_z.set_xlim(20, 20000)
+        ax_z.legend(fontsize=8, framealpha=0.35, facecolor=C_BG,
+                    edgecolor=C_GRID, labelcolor=C_TEXT)
+
         self.canvas.draw()
 
 
@@ -412,6 +513,7 @@ class ImpedanceTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._driver = None
+        self._horn_geometry = None
         self._build_ui()
 
     def _build_ui(self):
@@ -448,45 +550,23 @@ class ImpedanceTab(QWidget):
         if MATPLOTLIB_AVAILABLE and sim_result is not None:
             self._draw_impedance_from_sim(sim_result)
 
-    def _draw_impedance_from_sim(self, sim):
-        """Impedenza elettrica con carico acustico della tromba integrato."""
-        freqs = sim.frequencies
-        Z_free = np.abs(sim.z_electrical_complex)  # già calcolata dal sim engine
+    def _compute_free_z(self, freqs: np.ndarray) -> np.ndarray:
+        """
+        Calcola l'impedenza elettrica complessa del driver libero (circuito T&S
+        senza carico acustico della tromba).
 
-        self.fig.clear()
-        ax = self.fig.add_subplot(111)
-        driver_label = ""
-        if self._driver:
-            driver_label = f" — {self._driver.manufacturer} {self._driver.model}"
-        _setup_ax(ax, f"Impedenza elettrica (con carico tromba){driver_label}",
-                  "Frequenza (Hz)", "|Z| (Ω)")
+        Args:
+            freqs: array frequenze [Hz]
 
-        # Impedenza libera (solo driver, senza tromba)
-        self._draw_impedance(ax_override=ax, freqs_override=freqs, label_free=True)
-
-        # Impedenza con carico tromba
-        ax.semilogx(freqs, Z_free, color=C_GREEN, linewidth=2.0,
-                    label="|Z| con tromba")
-
-        if self._driver:
-            ax.axvline(x=self._driver.fs, color=C_ORANGE, linewidth=1.0,
-                       linestyle="--", alpha=0.7, label=f"Fs = {self._driver.fs:.0f} Hz")
-
-        ax.set_xlim(10, 20000)
-        ax.legend(fontsize=8, framealpha=0.35, facecolor=C_BG,
-                  edgecolor=C_GRID, labelcolor=C_TEXT)
-        self.canvas.draw()
-
-    def _draw_impedance(self, ax_override=None, freqs_override=None, label_free=False):
-        """Curva impedenza driver libero (circuito T&S, senza carico tromba)."""
+        Returns:
+            array complesso Z(f) [Ω]
+        """
         d = self._driver
         if d is None:
-            return
+            return np.full(len(freqs), np.nan + 0j, dtype=complex)
 
-        freqs = freqs_override if freqs_override is not None else \
-                np.logspace(np.log10(10), np.log10(20000), 800)
-        omega   = 2 * np.pi * freqs
-        omega_s = 2 * np.pi * d.fs
+        omega   = 2.0 * np.pi * freqs
+        omega_s = 2.0 * np.pi * d.fs
         mms_kg  = d.mms * 1e-3
 
         if d.vas > 0 and d.sd > 0:
@@ -499,7 +579,111 @@ class ImpedanceTab(QWidget):
         Z_mec = rms + 1j * (omega * mms_kg - 1.0 / (omega * cms + 1e-30))
         Z_mot = (d.bl ** 2) / Z_mec
         Z_coil = d.re + 1j * omega * (d.le * 1e-3)
-        Z_total = np.abs(Z_coil + Z_mot)
+        return Z_coil + Z_mot
+
+    def _draw_impedance_from_sim(self, sim):
+        """
+        Layout a 2 pannelli per l'impedenza elettrica del driver con carico tromba.
+
+        Pannello 1 — |Z|(f):
+            Modulo impedenza libera (tratteggiata blu) vs caricata tromba (verde).
+            Evidenzia variazione del picco di risonanza e livello di plateau.
+
+        Pannello 2 — Re(Z) e Im(Z) con tromba (twin Y-axis, arancione/viola):
+            Re(Z): parte resistiva — mostra la potenza effettivamente irradiata
+                   dal carico acustico rif. alla back-EMF del driver.
+            Im(Z): parte reattiva — mostra come la tromba sposta la frequenza
+                   di risonanza equivalente elettrica.
+            Entrambe anche come dashed per il driver libero (confronto).
+        """
+        freqs    = sim.frequencies
+        Z_loaded = sim.z_electrical_complex          # complex: driver + carico tromba
+        Z_free   = self._compute_free_z(freqs)       # complex: driver libero T&S
+        d  = self._driver
+        fc = self._horn_geometry.cutoff_frequency_hz if self._horn_geometry else None
+
+        driver_label = f" — {d.manufacturer} {d.model}" if d else ""
+
+        self.fig.clear()
+
+        # ── Pannello 1: |Z(f)| confronto libero / con tromba ────────────
+        ax_mag = self.fig.add_subplot(211)
+        _setup_ax(ax_mag, f"Impedenza elettrica{driver_label}", "", "|Z| (Ω)")
+
+        ax_mag.semilogx(freqs, np.abs(Z_free), color=C_BLUE, linewidth=1.4,
+                        linestyle="--", alpha=0.75, label="|Z| driver libero")
+        ax_mag.semilogx(freqs, np.abs(Z_loaded), color=C_GREEN, linewidth=2.0,
+                        label="|Z| con tromba")
+
+        if d:
+            ax_mag.axvline(x=d.fs, color=C_ORANGE, linewidth=1.0, linestyle="--",
+                           alpha=0.7, label=f"Fs = {d.fs:.0f} Hz")
+            ax_mag.axhline(y=d.re, color=C_RED, linewidth=0.6, linestyle=":",
+                           alpha=0.55, label=f"Re = {d.re:.1f} Ω")
+        if fc is not None:
+            ax_mag.axvline(x=fc, color=C_PURPLE, linewidth=0.8, linestyle=":",
+                           alpha=0.7, label=f"Fc = {fc:.0f} Hz")
+
+        z_max = max(np.nanmax(np.abs(Z_loaded)), np.nanmax(np.abs(Z_free))) * 1.15
+        ax_mag.set_xlim(10, 20000)
+        ax_mag.set_ylim(0, z_max)
+        ax_mag.legend(fontsize=7.5, framealpha=0.35, facecolor=C_BG,
+                      edgecolor=C_GRID, labelcolor=C_TEXT, loc="upper left")
+
+        # ── Pannello 2: Re(Z) e Im(Z) twin-Y ─────────────────────────────
+        ax_re = self.fig.add_subplot(212)
+        ax_im = ax_re.twinx()
+
+        ax_re.set_facecolor(C_AX)
+        ax_re.set_title("Re(Z) / Im(Z) — effetto carico tromba",
+                        color=C_TEXT, fontsize=10, pad=8)
+        ax_re.set_xlabel("Frequenza (Hz)", color=C_SUBTLE, fontsize=9)
+        ax_re.set_ylabel("Re(Z) (Ω)", color=C_ORANGE, fontsize=9)
+        ax_im.set_ylabel("Im(Z) (Ω)", color=C_PURPLE, fontsize=9)
+        ax_re.tick_params(axis="x", colors=C_SUBTLE, labelsize=8)
+        ax_re.tick_params(axis="y", colors=C_ORANGE, labelsize=8)
+        ax_im.tick_params(axis="y", colors=C_PURPLE,  labelsize=8)
+        for sp in ax_re.spines.values():
+            sp.set_color(C_GRID)
+        ax_re.grid(True, color=C_GRID, linewidth=0.5, alpha=0.8)
+        ax_re.spines["left"].set_color(C_ORANGE)
+        ax_im.spines["right"].set_color(C_PURPLE)
+
+        # Libero — tratteggiato, più sottile
+        ax_re.semilogx(freqs, Z_free.real, color=C_ORANGE, linewidth=0.9,
+                       linestyle="--", alpha=0.45, label="Re libero")
+        ax_im.semilogx(freqs, Z_free.imag, color=C_PURPLE, linewidth=0.9,
+                       linestyle="--", alpha=0.45)
+
+        # Con tromba — solido, pieno
+        ln_re, = ax_re.semilogx(freqs, Z_loaded.real, color=C_ORANGE,
+                                 linewidth=2.0, label="Re(Z) con tromba")
+        ln_im, = ax_im.semilogx(freqs, Z_loaded.imag, color=C_PURPLE,
+                                 linewidth=2.0, linestyle="--",
+                                 label="Im(Z) con tromba")
+
+        ax_re.axhline(y=0, color=C_GRID, linewidth=0.6, linestyle=":")
+        ax_im.axhline(y=0, color=C_GRID, linewidth=0.4, linestyle=":", alpha=0.6)
+        if fc is not None:
+            ax_re.axvline(x=fc, color=C_PURPLE, linewidth=0.8, linestyle=":",
+                          alpha=0.5)
+        ax_re.set_xlim(10, 20000)
+
+        ax_re.legend([ln_re, ln_im], ["Re(Z) con tromba", "Im(Z) con tromba"],
+                     fontsize=7.5, framealpha=0.35, facecolor=C_BG,
+                     edgecolor=C_GRID, labelcolor=C_TEXT, loc="upper left")
+
+        self.canvas.draw()
+
+    def _draw_impedance(self, ax_override=None, freqs_override=None, label_free=False):
+        """Curva impedenza driver libero (circuito T&S, senza carico tromba)."""
+        d = self._driver
+        if d is None:
+            return
+
+        freqs   = freqs_override if freqs_override is not None else \
+                  np.logspace(np.log10(10), np.log10(20000), 800)
+        Z_total = np.abs(self._compute_free_z(freqs))
 
         if ax_override is not None:
             ax = ax_override
