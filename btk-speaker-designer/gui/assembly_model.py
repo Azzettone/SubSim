@@ -85,8 +85,17 @@ class ChamberParams:
 class PortParams:
     """Parametri porta bass-reflex (opzionale)."""
     enabled: bool = False
-    diameter: float = 0.10   # m
-    length: float = 0.20     # m
+    diameter: float = 0.10      # m (porta circolare)
+    # Lunghezza fissa; se fb_hz>0 e vbox_l>0 viene ricalcolata via Helmholtz
+    length: float = 0.20        # m
+    fb_hz: float = 0.0          # Hz, accordo Helmholtz (0 = usa length diretto)
+    vbox_l: float = 0.0         # L, volume camera (0 = autodetect da ChamberBlock)
+    # Posizione della porta sul cabinet
+    face: str = "rear"          # "rear"|"front"|"bottom"|"top"|"left"|"right"
+    offset_x: float = 0.0       # m — offset laterale sul piano della faccia
+    offset_y: float = 0.0       # m — offset verticale sul piano della faccia
+    # Numero di porte identiche
+    n_ports: int = 1
 
 
 # ---------------------------------------------------------------------------
@@ -314,13 +323,42 @@ class AssemblyModel(QObject):
                     chamber = None
 
             # PortBlock (opzionale)
+            # La posizione viene calcolata dalla faccia del cabinet selezionata.
             port: Optional[PortBlock] = None
             if self._port_params.enabled:
                 pp = self._port_params
                 try:
-                    port = PortBlock.from_dimensions(
-                        diameter=pp.diameter, length=pp.length,
+                    # Posizione e normale in base alla faccia del cabinet
+                    pos, nrm = self._port_position_on_face(
+                        pp, self._chamber_params
                     )
+                    # Volume camera: usa quello dichiarato o quello del ChamberBlock
+                    if pp.fb_hz > 0:
+                        vbox = pp.vbox_l if pp.vbox_l > 0 else (
+                            self._chamber_params.width
+                            * self._chamber_params.height
+                            * self._chamber_params.depth
+                            * 1000.0  # m³ → L
+                        )
+                        try:
+                            port = PortBlock.from_tuning(
+                                Fb=pp.fb_hz,
+                                chamber_volume=vbox / 1000.0,  # L → m³
+                                diameter=pp.diameter,
+                                position=pos,
+                                normal=nrm,
+                            )
+                        except Exception:
+                            # fallback a length fissa
+                            port = PortBlock.from_dimensions(
+                                diameter=pp.diameter, length=pp.length,
+                                position=pos, normal=nrm,
+                            )
+                    else:
+                        port = PortBlock.from_dimensions(
+                            diameter=pp.diameter, length=pp.length,
+                            position=pos, normal=nrm,
+                        )
                 except Exception as exc:
                     self.validation_failed.emit(f"PortBlock: {exc}")
 
@@ -410,11 +448,25 @@ class AssemblyModel(QObject):
                     )
 
         if self._port_block is not None:
-            try:
-                solids["port"] = port_to_solid(self._port_block)
-            except Exception as exc:
-                warnings.warn(f"AssemblyModel: solid 'port' fallito: {exc}",
-                              stacklevel=2)
+            pp = self._port_params
+            n_ports = max(1, getattr(pp, "n_ports", 1))
+            W = float(self._chamber_params.width) if self._chamber_block is not None else 0.6
+            # Spaziatura orizzontale per N porte: le distribuisce simmetricamente
+            spacing = W / (n_ports + 1)
+            for i in range(n_ports):
+                # offset x simmetrico rispetto al centro della porta principale
+                dx = spacing * (i + 1) - W / 2.0
+                raw_pos = self._port_block.position.copy()
+                raw_pos[0] = float(self._port_block.position[0]) + dx
+                from copy import copy as _copy
+                port_i = _copy(self._port_block)
+                port_i.position = raw_pos
+                key = "port" if n_ports == 1 else f"port_{i+1}"
+                try:
+                    solids[key] = port_to_solid(port_i)
+                except Exception as exc:
+                    warnings.warn(f"AssemblyModel: solid '{key}' fallito: {exc}",
+                                  stacklevel=2)
 
         if self._driver_block is not None:
             try:
@@ -430,6 +482,53 @@ class AssemblyModel(QObject):
         return dict(solids)
 
     # ------------------------------------------------------------------ helpers
+    @staticmethod
+    def _port_position_on_face(
+        pp: "PortParams",
+        cp: "ChamberParams",
+    ) -> "Tuple[np.ndarray, np.ndarray]":
+        """Calcola posizione e normale del port in base alla faccia del cabinet.
+
+        Facce disponibili (coordinate interne al cabinet):
+        - "rear"  :  z = -depth,  nrm = -Z   (parete posteriore)
+        - "front" :  z = 0,       nrm = +Z   (parete frontale / gola tromba)
+        - "bottom":  y = -H/2,    nrm = -Y   (parete inferiore)
+        - "top"   :  y = +H/2,    nrm = +Y
+        - "left"  :  x = -W/2,    nrm = -X
+        - "right" :  x = +W/2,    nrm = +X
+
+        offset_x, offset_y si applicano all'interno del piano della faccia.
+        """
+        W = float(cp.width)
+        H = float(cp.height)
+        D = float(cp.depth)
+        ox = float(pp.offset_x)
+        oy = float(pp.offset_y)
+
+        face = (pp.face or "rear").lower()
+        if face == "rear":
+            pos = np.array([ox, oy, -D])
+            nrm = np.array([0.0, 0.0, -1.0])
+        elif face == "front":
+            pos = np.array([ox, oy, 0.0])
+            nrm = np.array([0.0, 0.0, 1.0])
+        elif face == "bottom":
+            pos = np.array([ox, -H / 2.0, oy])
+            nrm = np.array([0.0, -1.0, 0.0])
+        elif face == "top":
+            pos = np.array([ox, H / 2.0, oy])
+            nrm = np.array([0.0, 1.0, 0.0])
+        elif face == "left":
+            pos = np.array([-W / 2.0, oy, ox])
+            nrm = np.array([-1.0, 0.0, 0.0])
+        elif face == "right":
+            pos = np.array([W / 2.0, oy, ox])
+            nrm = np.array([1.0, 0.0, 0.0])
+        else:
+            pos = np.array([0.0, 0.0, -D])
+            nrm = np.array([0.0, 0.0, -1.0])
+        return pos, nrm
+
     def _maybe_rebuild(self) -> None:
         """Se è disponibile un driver, ricostruisce automaticamente."""
         if self._driver is not None:

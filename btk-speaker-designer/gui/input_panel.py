@@ -648,6 +648,47 @@ class InputPanel(QWidget):
         self._slot_h_label.setVisible(False)
         self.slot_h_spin.setVisible(False)
 
+        # Faccia del cabinet su cui esce la porta
+        port_layout.addWidget(QLabel("Faccia porta:"), r, 0)
+        self.port_face_combo = QComboBox()
+        _face_labels = [
+            ("Posteriore", "rear"),
+            ("Frontale",   "front"),
+            ("Inferiore",  "bottom"),
+            ("Superiore",  "top"),
+            ("Sinistra",   "left"),
+            ("Destra",     "right"),
+        ]
+        for label, data in _face_labels:
+            self.port_face_combo.addItem(label, data)
+        self.port_face_combo.setToolTip(
+            "Su quale faccia del cabinet sbuca la porta reflex.\n"
+            "Default: Posteriore (z=-depth, normale uscente)."
+        )
+        self.port_face_combo.currentIndexChanged.connect(self._schedule_model_sync)
+        port_layout.addWidget(self.port_face_combo, r, 1); r += 1
+
+        # Offset posizione porta nella faccia
+        _offset_label = QLabel("Offset X faccia:")
+        self._port_offset_x_spin = QDoubleSpinBox()
+        self._port_offset_x_spin.setRange(-500, 500)
+        self._port_offset_x_spin.setValue(0.0)
+        self._port_offset_x_spin.setSuffix(" mm")
+        self._port_offset_x_spin.setToolTip("Spostamento orizzontale del centro porta sulla faccia.")
+        self._port_offset_x_spin.valueChanged.connect(self._schedule_model_sync)
+        port_layout.addWidget(_offset_label, r, 0)
+        port_layout.addWidget(self._port_offset_x_spin, r, 1); r += 1
+
+        _offset_y_label = QLabel("Offset Y faccia:")
+        self._port_offset_y_spin = QDoubleSpinBox()
+        self._port_offset_y_spin.setRange(-500, 500)
+        self._port_offset_y_spin.setValue(0.0)
+        self._port_offset_y_spin.setSuffix(" mm")
+        self._port_offset_y_spin.setToolTip("Spostamento verticale del centro porta sulla faccia.")
+        self._port_offset_y_spin.valueChanged.connect(self._schedule_model_sync)
+        port_layout.addWidget(_offset_y_label, r, 0)
+        port_layout.addWidget(self._port_offset_y_spin, r, 1); r += 1
+
         self.gb_port_type = self._group("TIPO PORTA REFLEX", port_layout)
         vbox.addWidget(self.gb_port_type)
 
@@ -1102,6 +1143,20 @@ class InputPanel(QWidget):
                 height=(h_mm / 1000.0) if h_mm > 0 else 0.60,
                 depth=(d_mm / 1000.0) if d_mm > 0 else 0.50,
                 panel_thickness=t_m,
+            )
+            # ── Port params ──
+            has_reflex = self._enclosure_type in ENCLOSURE_HAS_REFLEX
+            m.update_port_params(
+                enabled=has_reflex,
+                diameter=self.port_diam_spin.value() / 1000.0,
+                fb_hz=self.fb_spin.value() if has_reflex else 0.0,
+                vbox_l=self.vbox_spin.value() if has_reflex else 0.0,
+                n_ports=int(self.n_ports_spin.value()),
+                face=self.port_face_combo.currentData() if hasattr(self, "port_face_combo") else "rear",
+                offset_x=getattr(self, "_port_offset_x_spin", None) and
+                         self._port_offset_x_spin.value() / 1000.0 or 0.0,
+                offset_y=getattr(self, "_port_offset_y_spin", None) and
+                         self._port_offset_y_spin.value() / 1000.0 or 0.0,
             )
         finally:
             m.auto_rebuild_solids = prev_auto
